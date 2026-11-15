@@ -136,6 +136,74 @@ calibrated to each monitored workflow's actual cadence (fixed 2026-09-10 after a
 thresholds were tighter than the workflows they monitored could ever satisfy, guaranteeing false
 alarms — see that script's own header comment).
 
+### 5.4 GitHub Actions account-level disablement (P0, 2026-11-14; recovery not yet verified)
+
+**Observed:** GitHub Actions displayed `GitHub Actions is currently disabled for your account`
+and the workflow dispatch API returned `Actions has been disabled for this user`.
+The last verified successful authoritative publisher was run #196, ending
+2026-11-14 07:34 UTC (candidate `generated_at` 07:24 UTC). An unstarted
+Dependabot run was still queued on 2026-11-15. See the GitHub Actions run
+history and the incident evidence before treating these observations as current.
+
+**Customer impact:** The Worker fetches `api/v1/intel/latest.json` from
+`sentinel-apex-data` R2, not from GitHub Pages. After the immutable
+six-hour freshness contract expires, the gateway deliberately returns 503.
+The HTML dashboard cannot restore the feed. The merged dashboard stale-state
+fix (PR #1014) is not a feed publisher, and its production deployment is
+not yet certified.
+
+**Immediate read-only triage:**
+
+1. Check GitHub's Actions banner, account email, billing and existing support
+   ticket. GitHub documentation says an account-level GitHub-controlled
+   restriction cannot be lifted through ordinary repository Actions settings;
+   request account restoration from GitHub Support. Do not move repositories
+   or alter GitHub identities to evade an enforcement restriction.
+2. Query public `/api/health`, `/api/feed.json`, and
+   `/api/v1/intel/latest.json`; capture UTC timestamp, HTTP status,
+   `generated_at`, `age_seconds`, `max_age_seconds` and content hash
+   without recording customer secrets. On a stale 503, keep the fail-closed
+   response; never restamp old intelligence or increase the six-hour limit.
+3. Inspect the exact main SHA and workflow `.github/workflows/sentinel-apex.yml`,
+   plus `scripts/run_pipeline.py`, `scripts/r2_upload.py`, and
+   `scripts/r2_resync_manifests.py`. A reduced stage profile is **not**
+   certified: the 130-minute workflow contains additional generation,
+   enrichment, TLP, KEV, FREE/PRO parity, budget and final resync stages
+   beyond `run_pipeline.py`. The orchestrator mutates local files and
+   has no safe stage-subset CLI. Do not invoke the full workflow blindly
+   outside a controlled throwaway checkout.
+4. Offline Phase 0 may inspect the workflow and run local tests using
+   synthetic or isolated fixtures, without Cloudflare credentials, Blogger
+   publishing, external notifications, Git pushes, deployment, or R2 writes.
+
+**Controlled break-glass publishing — blocked pending certification and
+explicit separate authorization:** Prepare an exact-SHA, isolated runner
+using the same canonical producer and its last-mile TLP/Worker preflight,
+immutable public freshness contract, CISA KEV and FREE/PRO verification,
+bounded R2 operation plan, anti-rollback checks, and final R2 readback.
+Document the minimum viable ordered stage set and prove it with a contract
+test against the canonical workflow. Never publish from checked-in static
+`latest.json` alone. No unbounded R2 sync or LIST; retain
+`PRE_REVENUE_COST_MODE=true` and existing budget ceilings. Use only a
+dedicated least-privilege R2 credential scoped to the exact bucket, issued
+and handled by the owner, not placed in chat or source control.
+
+**Go/no-go for the first live recovery run:** Verify the account restriction
+has ended **or** the independently reviewed contingency is authorized;
+capture the exact SHA, operator, R2 target, estimated operation budget,
+rollback target, and independent alert channel. Verify the candidate's
+original source timestamps, schema, genuine evidence, TLP, FREE/PRO parity
+and Worker acceptance **before** a PUT. After the PUT, require matching
+R2 content/readback, fresh public 200s, correct `generated_at`, dashboard
+freshness state, latest report chronology, health and customer journey.
+Partial upload, skipped critical manifest, stale data, empty feeds, failed
+paid-parity readback or unverified dashboard deployment => **NO-GO**.
+
+**Follow-up:** Add an independent freshness watcher on the existing
+Cloudflare cron only after a separate cost and change review and verified
+ops alert destination. A GitHub-hosted staleness monitor is not an
+independent detector when GitHub Actions itself is disabled.
+
 ## 6. Open Action Items (tracked here, not silently dropped)
 
 1. Run a real restore drill (`scripts/restore_kv_from_r2.py`) against a non-production namespace,
