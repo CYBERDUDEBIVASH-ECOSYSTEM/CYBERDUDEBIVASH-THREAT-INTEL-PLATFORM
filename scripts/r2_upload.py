@@ -1217,9 +1217,29 @@ def main() -> None:
 
     # --- Execute the plan -- budget already cleared, safe to mutate ---
     uploaded = 0
+    failed_keys = []
     for src, dst_key in pairs:
         if s3_cp(src, BUCKET_DATA, dst_key, endpoint):
             uploaded += 1
+        else:
+            failed_keys.append(dst_key)
+    # A partially written R2 dataset is NOT a successful publication. Do not
+    # authorize downstream cache invalidation or report this run as PASS.
+    # R2 object PUTs are not transactional: already successful objects remain.
+    if not pairs or failed_keys or uploaded != len(pairs):
+        log.critical(
+            "P0 R2 DATA UPLOAD INCOMPLETE: %d/%d PUTs succeeded; failed keys=%s. "
+            "Partial writes may exist; no release or cache promotion is permitted.",
+            uploaded, len(pairs), failed_keys,
+        )
+        emit_summary(
+            plan, budgets, status="BLOCKED", is_report_plan=False,
+            extra={"reason": "R2_DATA_UPLOAD_INCOMPLETE",
+                   "files_planned": len(pairs), "files_uploaded": uploaded,
+                   "files_failed": len(failed_keys)},
+        )
+        tlp_scratch.cleanup()
+        sys.exit(1)
     log.info("OK: %d/%d planned R2 data-bucket files uploaded", uploaded, len(pairs))
 
     # --- Upload 4a / 4a-PDF: REMOVED (P0 R2 COST INCIDENT, 2026-09) ---
@@ -1275,7 +1295,16 @@ def main() -> None:
     with open(sync_meta_path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
 
-    s3_cp(sync_meta_path, BUCKET_DATA, "intel/_sync_meta.json", endpoint)
+    if not s3_cp(sync_meta_path, BUCKET_DATA, "intel/_sync_meta.json", endpoint):
+        log.critical("P0 R2 SYNC METADATA PUT FAILED: publication cannot be marked PASS")
+        emit_summary(
+            plan, budgets, status="BLOCKED", is_report_plan=False,
+            extra={"reason": "R2_SYNC_META_UPLOAD_FAILED",
+                   "files_planned": len(pairs) + 1, "files_uploaded": uploaded,
+                   "files_failed": 1},
+        )
+        tlp_scratch.cleanup()
+        sys.exit(1)
     log.info("OK: Sync metadata written (%d advisories synced to R2)", item_count)
 
     write_github_env("R2_UPLOAD_COUNT", str(item_count))
