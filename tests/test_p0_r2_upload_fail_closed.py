@@ -5,16 +5,12 @@ GitHub Actions dispatch, and no production customer data.
 """
 from pathlib import Path
 import os
-from unittest import mock
-
 import pytest
 
 from scripts import r2_upload as upload
 
 
 def _run_with_put_results(tmp_path, monkeypatch, results):
-    from p0_r44_publication_boundary import finalize_public_feed
-    del finalize_public_feed  # imported for the same module resolution as main()
     monkeypatch.setattr("p0_r44_publication_boundary.finalize_public_feed", lambda _root: None)
     monkeypatch.setattr(upload, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(upload, "get_credentials", lambda: ("fake-account", "fake-id", "fake-secret"))
