@@ -55,3 +55,38 @@ test('Non-mutating Swarm regression remains eligible on PR and push',()=>{
   assert.match(yaml,/npm run deploy:dry/);
   assert.doesNotMatch(yaml,/^\s*run: npx wrangler deploy\s*$/m);
 });
+
+function assertLatestMainBeforeProductionWrite(yaml,operationStep,workflow) {
+  assert.match(yaml,/^  cancel-in-progress: false$/m,workflow+': in-flight operations must not be canceled');
+  assert.match(yaml,/^          ref: \${{ inputs.approved_commit_sha }}$/m,workflow+': checkout must pin approved SHA');
+  assert.match(yaml,/^          persist-credentials: false$/m,workflow+': checkout must not persist token');
+  const preflight = yaml.indexOf('      - name: "P0 verified current-main production authority (fail closed)"');
+  const operation = yaml.indexOf(operationStep);
+  assert.ok(preflight >= 0 && operation > preflight,workflow+': current main check must precede operation');
+  const guard = yaml.slice(preflight,operation);
+  for(const token of [
+    'GH_TOKEN: ${{ github.token }}',
+    'CDB_APPROVED_SHA: ${{ inputs.approved_commit_sha }}',
+    'set -euo pipefail',
+    'GITHUB_SHA',
+    'git rev-parse HEAD',
+    'CURRENT_MAIN_SHA',
+    'gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
+    'CURRENT_MAIN_SHA" != "$CDB_APPROVED_SHA'
+  ]) assert.ok(guard.includes(token),workflow+': missing release invariant '+token);
+}
+
+test('Both production workflows serialize dispatch and reauthorize current main immediately before write',()=>{
+  assertLatestMainBeforeProductionWrite(load('deploy-swarm-live.yml'),'      - name: "Deploy Worker to Cloudflare (with retry)"','deploy-swarm-live');
+  assertLatestMainBeforeProductionWrite(load('swarm-v4470-authenticated-e2e-cert.yml'),'      - name: Create short-lived production demo credential','authenticated-e2e-cert');
+  assert.match(load('swarm-v4470-authenticated-e2e-cert.yml'),/^        if: always\(\) && steps.demo_key.outcome != 'skipped'$/m);
+});
+
+test('Negative control: accidental push trigger is rejected by manual authority assertions',()=>{
+  for(const name of ['deploy-swarm-live.yml','swarm-v4470-authenticated-e2e-cert.yml']) {
+    const yaml=load(name);
+    const mutation=yaml.replace('  workflow_dispatch:','  push:\n    branches: [main]\n  workflow_dispatch:');
+    assert.notEqual(mutation,yaml);
+    assert.throws(()=>assertManualAuthority(mutation,name),/dispatch-only/);
+  }
+});
