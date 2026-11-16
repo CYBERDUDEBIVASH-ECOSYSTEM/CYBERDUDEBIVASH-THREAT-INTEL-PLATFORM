@@ -113,7 +113,9 @@ def test_genuine_ghsa_ingestor_emits_required_evidence_at_network_boundary(monke
     assert len(rows) == 1
     row = rows[0]
     assert row["publication_timestamp"] == document["published_at"]
-    assert row["retrieval_timestamp"] == row["processed_at"] or row["retrieval_timestamp"]
+    retrieval = datetime.fromisoformat(row["retrieval_timestamp"].replace("Z", "+00:00"))
+    processed = datetime.fromisoformat(row["processed_at"].replace("Z", "+00:00"))
+    assert abs((retrieval - processed).total_seconds()) <= 5
     assert row["source_url"] == document["html_url"]
     assert row["evidence_count"] == 1
     assert checkpoint.updated is not None
