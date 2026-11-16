@@ -1,40 +1,32 @@
 name: V4.47 Authenticated Production E2E Certification v201.0
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/swarm-v4470-authenticated-e2e-cert.yml'
-      - 'workers/swarm-live/scripts/release-validate.mjs'
-      - 'workers/swarm-live/scripts/release-validate.contract.test.mjs'
-      - 'workers/swarm-live/scripts/post-demo-certify.mjs'
-      - 'workers/swarm-live/package.json'
-      - 'workers/intel-gateway/scripts/demo-key-operator.mjs'
-      # P0: CSV output, paid R2 publisher and IOC candidate transformations
-      # are in the V4.47 live certification blast radius. PR #848 changed
-      # the CSV exporter without matching this path filter, so its post-merge
-      # certification never ran. Preserve existing strict fail-closed checks.
-      - 'workers/intel-gateway/src/api-extensions.js'
-      - 'scripts/generate_api_manifests.py'
-      - 'scripts/public_api_sanitizer.py'
-      - 'workers/swarm-live/scripts/certification-ioc-candidates.mjs'
-      - 'workers/swarm-live/scripts/await-gateway-deploy.mjs'
-      - 'workers/swarm-live/scripts/mission-diagnostic.mjs'
-  workflow_dispatch: {}
-
+  workflow_dispatch:
+    inputs:
+      approved_commit_sha:
+        description: 'Exact 40-character main HEAD SHA authorized for this production operation'
+        required: true
+        type: string
 permissions:
   contents: read
 
 concurrency:
   group: swarm-v4470-authenticated-production-e2e
-  cancel-in-progress: true
+  # Never cancel an in-flight deploy or authenticated run with cleanup pending.
+  cancel-in-progress: false
 
 jobs:
   certify:
     name: "Authenticated production mission + evidence + revocation"
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: github.actor != 'github-actions[bot]'
+    # P0 migration: running an authenticated mission creates short-lived
+    # production credentials; do not execute on a normal source push.
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.approved_commit_sha == github.sha &&
+      github.actor != 'github-actions[bot]'
 
     env:
       SWARM_DIR: workers/swarm-live
@@ -44,6 +36,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.approved_commit_sha }}
+          persist-credentials: false
 
       - name: Setup Node.js 22
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -95,6 +90,32 @@ jobs:
           set -euo pipefail
           node --test scripts/await-gateway-deploy.test.mjs scripts/mission-diagnostic.test.mjs
           node scripts/await-gateway-deploy.mjs
+
+      # P0: recheck main immediately before production write or credential creation.
+      - name: "P0 verified current-main production authority (fail closed)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CDB_APPROVED_SHA: ${{ inputs.approved_commit_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CDB_APPROVED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Approved commit SHA must be lowercase 40-character hex."
+            exit 1
+          fi
+          if [ "$GITHUB_SHA" != "$CDB_APPROVED_SHA" ]; then
+            echo "::error::Dispatch SHA does not equal approved commit."
+            exit 1
+          fi
+          CURRENT_MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [ "$CURRENT_MAIN_SHA" != "$CDB_APPROVED_SHA" ]; then
+            echo "::error::Main changed after approval; re-review exact commit."
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$CDB_APPROVED_SHA" ]; then
+            echo "::error::Checkout is not the approved commit."
+            exit 1
+          fi
+          echo "PASS: exact approved current-main commit verified before production operation."
 
       - name: Create short-lived production demo credential
         id: demo_key
