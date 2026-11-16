@@ -1,4 +1,4 @@
-# SENTINEL APEX -- Swarm Live Worker Auto-Deploy
+# SENTINEL APEX -- Swarm Live Worker Manual-Only Production Release
 #
 # workers/swarm-live has real, tested, merged code (PRs #423/#425/#426/#427)
 # but has never had a CI deploy path -- every prior PR in this worker's
@@ -12,7 +12,7 @@
 # live page directly.
 #
 # This workflow closes that gap the same way workers/intel-gateway's own
-# deploy-worker.yml already does for its worker: deploy on push to main,
+# deploy-worker.yml already does for its worker: operator-authorized dispatch on main,
 # verify live via a real health check, degrade gracefully (not silently)
 # on the same CF_API_TOKEN Workers-Routes-scope gap deploy-worker.yml
 # already diagnosed and documented for this exact zone
@@ -43,15 +43,12 @@
 name: deploy-swarm-live v201.0
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'workers/swarm-live/src/**'
-      - 'workers/swarm-live/wrangler.toml'
-      - 'workers/swarm-live/package.json'
-      - 'workers/swarm-live/package-lock.json'
   workflow_dispatch:
-
+    inputs:
+      approved_commit_sha:
+        description: 'Exact 40-character main HEAD SHA authorized for this production operation'
+        required: true
+        type: string
 permissions:
   contents: read
 
@@ -66,11 +63,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Same defense-in-depth as deploy-worker.yml: no automated bot commit
-    # should ever be able to trigger a production redeploy.
+    # P0 migration: production deployment is never a side-effect of push.
+    # Only an approved, immutable current-main dispatch can reach Cloudflare.
     if: |
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.actor != 'github-actions[bot]')
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.approved_commit_sha == github.sha &&
+      github.actor != 'github-actions[bot]'
 
     steps:
       - name: "Checkout repository"
