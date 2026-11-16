@@ -14,7 +14,8 @@
 
 - Remove `on.push` from the Worker release and authenticated production certification workflows.
 - Require `workflow_dispatch.inputs.approved_commit_sha`, a manual dispatch on `refs/heads/main`, and exact equality to `github.sha`.
-- Retain non-bot enforcement; keep the existing deploy preflight, post-deploy validation, credential creation, mission checks and revocation steps unchanged.
+- Retain non-bot enforcement and the existing deploy/mission and revocation logic. Change both workflow concurrency settings to `cancel-in-progress: false` so later dispatches do not abort in-flight production writes or short-lived key cleanup.
+- Pin `actions/checkout` to the exact approved SHA with `persist-credentials: false` and require a second fail-closed check of the *current remote main SHA* through the GitHub API immediately before deployment/key creation. This protects against approval-to-write branch drift.
 - Extend existing non-mutating Swarm regression gate to check this invariant on PRs touching these workflows, with `node --test tests/p0-swarm-manual-production-authority.test.mjs`.
 - No change to `sentinel-apex.yml`, intelligence freshness, production R2/D1/KV, entitlements, APIs, secrets, or customer-facing routes.
 
@@ -29,7 +30,9 @@ node --version
 node --test tests/p0-swarm-manual-production-authority.test.mjs
 ```
 
-Expected: 3 tests passed (2 manual-only release authority checks + 1 preserved regression eligibility). This does **not** certify cloud deployment, YAML schema, production credential cleanup on failure, or historical Actions eligibility. Do not run production dispatch.
+Expected: **5 Node tests** passed (two original authorization checks, retained regression eligibility, current-main/serialization controls and negative control against reintroducing `push`). **Actual Node result: NOT EXECUTED.**
+
+Connected-GitHub source checks: **28/28 static assertions passed** against all four current files on this branch. These verify exact source tokens, order, cancellation policy and test presence, but **do not** validate YAML schema, GitHub Actions expression evaluation, Cloudflare deployment, external GitHub API permissions, production credential cleanup on all cancellation/failure paths or GitHub Actions eligibility. Do not dispatch production.
 
 ## Additional release gates
 
@@ -44,4 +47,4 @@ Expected: 3 tests passed (2 manual-only release authority checks + 1 preserved r
 
 Revert this PR after review, not by forcing a push or enabling scheduled/automatic production deployment. A temporary return to automatic deployment is **not** authorized just because Actions becomes available. Production Worker scripts/routes are untouched here.
 
-**Disposition:** DRAFT / NO-GO for merge until owner validates policy, 3 local tests, workflow YAML lint and clean PR diff. No production changes have been made.
+**Disposition:** DRAFT / NO-GO for merge until owner validates policy, **five local Node tests**, `actionlint`, all relevant product security tests, credential cleanup/expiration, up-to-date branch review and clean PR diff. No production changes have been made.
