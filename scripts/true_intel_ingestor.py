@@ -650,6 +650,10 @@ def ingest_github_advisories(feed_state: FeedState) -> List[Dict]:
         log.warning("[GH-ADVISORY] No data or unexpected format")
         return []
 
+    # Observation time belongs to this HTTP response, never to publication.
+    observed_at = _utc_now()
+    from agent.p0_r39_evidence import capture_ghsa_api_evidence
+
     items: List[Dict] = []
     newest_ts: Optional[datetime] = None
 
@@ -694,6 +698,11 @@ def ingest_github_advisories(feed_state: FeedState) -> List[Dict]:
             cves         = cves,
             risk_score   = risk,
         )
+        # Capture only observed GHSA evidence; unknown/missing fields remain
+        # ineligible under the unchanged downstream publication policy.
+        item.update(capture_ghsa_api_evidence(
+            adv, observed_at, _REPO / "data" / "quality" / "source_trust_scores.json",
+        ))
         items.append(item)
 
         if item_ts and (newest_ts is None or item_ts > newest_ts):
