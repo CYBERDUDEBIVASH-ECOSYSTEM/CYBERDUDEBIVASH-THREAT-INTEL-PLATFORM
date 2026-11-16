@@ -121,3 +121,24 @@ def test_genuine_ghsa_ingestor_emits_required_evidence_at_network_boundary(monke
     assert checkpoint.updated is not None
     selected, held = select_publishable(rows)
     assert selected == rows, held
+
+
+@pytest.mark.parametrize("change", [
+    {"published_at": None, "created_at": "2026-11-16T12:00:00Z"},
+    {"published_at": "2026-11-16T24:00:00Z"},
+    {"published_at": "2099-01-01T00:00:00Z"},
+    {"html_url": "https://github.com.evil.invalid/advisories/GHSA-1234-5678-abcd"},
+])
+def test_unverified_ghsa_cannot_advance_last_seen(monkeypatch, change):
+    class Checkpoint:
+        advanced = False
+        def is_new(self, source_key, item_ts):
+            return True
+        def update_last_seen(self, source_key, item_ts):
+            self.advanced = True
+
+    doc = {**_advisory(_stamp(-20)), **change}
+    monkeypatch.setattr(ingestor, "_get_json", lambda url, headers=None: [doc])
+    state = Checkpoint()
+    assert ingestor.ingest_github_advisories(state) == []
+    assert not state.advanced
