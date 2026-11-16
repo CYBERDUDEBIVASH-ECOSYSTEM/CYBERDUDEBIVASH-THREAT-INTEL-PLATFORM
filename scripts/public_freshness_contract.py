@@ -66,6 +66,10 @@ def parse_generated_at(raw: Any) -> Optional[datetime]:
     applies the identical pattern, so both sides reject the same inputs."""
     if not isinstance(raw, str) or not GENERATED_AT_RE.match(raw):
         return None
+    # Reject hour 24 before datetime.fromisoformat (Python 3.15 may normalize it).
+    # Match the JavaScript Worker contract: only hours 00 through 23 are valid.
+    if int(raw[11:13]) > 23:
+        return None
     text = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
     # datetime.fromisoformat accepts at most 6 fractional digits.
     m = re.match(r"^(.*T\d{2}:\d{2}:\d{2})(\.\d+)?(.*)$", text)
