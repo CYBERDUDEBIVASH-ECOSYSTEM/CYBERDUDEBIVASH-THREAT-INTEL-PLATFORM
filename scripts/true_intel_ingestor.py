@@ -650,12 +650,25 @@ def ingest_github_advisories(feed_state: FeedState) -> List[Dict]:
         log.warning("[GH-ADVISORY] No data or unexpected format")
         return []
 
+    # Observation time belongs to this HTTP response, never to publication.
+    observed_at = _utc_now()
+    from agent.p0_r39_evidence import capture_ghsa_api_evidence
+
     items: List[Dict] = []
     newest_ts: Optional[datetime] = None
 
     for adv in data:
-        published_str = adv.get("published_at", "") or adv.get("created_at", "")
-        item_ts = _parse_ts(published_str)
+        # Validate the actual GHSA source record BEFORE updating last_seen.
+        # created_at is NOT a publication time and an invalid/future timestamp
+        # must never poison the durable cursor for all subsequent advisories.
+        observed = capture_ghsa_api_evidence(
+            adv, observed_at, _REPO / "data" / "quality" / "source_trust_scores.json",
+        )
+        published_str = observed.get("publication_timestamp", "")
+        item_ts = _parse_ts(published_str) if published_str else None
+        if item_ts is None:
+            log.warning("[GH-ADVISORY] Holding unverified source record; checkpoint unchanged")
+            continue
 
         if not feed_state.is_new(SOURCE_KEY, item_ts):
             continue
@@ -694,6 +707,9 @@ def ingest_github_advisories(feed_state: FeedState) -> List[Dict]:
             cves         = cves,
             risk_score   = risk,
         )
+        # Capture only observed GHSA evidence; unknown/missing fields remain
+        # ineligible under the unchanged downstream publication policy.
+        item.update(observed)
         items.append(item)
 
         if item_ts and (newest_ts is None or item_ts > newest_ts):
