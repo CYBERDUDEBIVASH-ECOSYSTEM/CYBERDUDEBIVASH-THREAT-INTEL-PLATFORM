@@ -57,7 +57,8 @@ env:
 
 concurrency:
   group: swarm-live-deploy
-  cancel-in-progress: true
+  # Never cancel an in-flight deploy or authenticated run with cleanup pending.
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -74,6 +75,9 @@ jobs:
     steps:
       - name: "Checkout repository"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.approved_commit_sha }}
+          persist-credentials: false
 
       - name: "Setup Node.js 22"
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -99,6 +103,32 @@ jobs:
       - name: "Wrangler version"
         working-directory: ${{ env.WORKER_DIR }}
         run: npx wrangler --version
+
+      # P0: recheck main immediately before production write or credential creation.
+      - name: "P0 verified current-main production authority (fail closed)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CDB_APPROVED_SHA: ${{ inputs.approved_commit_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$CDB_APPROVED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Approved commit SHA must be lowercase 40-character hex."
+            exit 1
+          fi
+          if [ "$GITHUB_SHA" != "$CDB_APPROVED_SHA" ]; then
+            echo "::error::Dispatch SHA does not equal approved commit."
+            exit 1
+          fi
+          CURRENT_MAIN_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [ "$CURRENT_MAIN_SHA" != "$CDB_APPROVED_SHA" ]; then
+            echo "::error::Main changed after approval; re-review exact commit."
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" != "$CDB_APPROVED_SHA" ]; then
+            echo "::error::Checkout is not the approved commit."
+            exit 1
+          fi
+          echo "PASS: exact approved current-main commit verified before production operation."
 
       - name: "Deploy Worker to Cloudflare (with retry)"
         working-directory: ${{ env.WORKER_DIR }}
