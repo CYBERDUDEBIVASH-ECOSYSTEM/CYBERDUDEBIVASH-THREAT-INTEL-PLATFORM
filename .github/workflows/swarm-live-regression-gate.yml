@@ -28,6 +28,9 @@ on:
     paths:
       - 'workers/swarm-live/**'
       - '.github/workflows/swarm-live-regression-gate.yml'
+      - '.github/workflows/deploy-swarm-live.yml'
+      - '.github/workflows/swarm-v4470-authenticated-e2e-cert.yml'
+      - 'tests/p0-swarm-manual-production-authority.test.mjs'
   workflow_dispatch: {}
 
 permissions:
@@ -63,6 +66,9 @@ jobs:
 
       - name: "Run swarm-live regression suite (npm test)"
         run: npm test
+
+      - name: "P0 manual-only production authority regression (offline)"
+        run: node --test ../../tests/p0-swarm-manual-production-authority.test.mjs
 
       - name: "Wrangler production bundle dry-run"
         run: npm run deploy:dry -- --config wrangler.toml
