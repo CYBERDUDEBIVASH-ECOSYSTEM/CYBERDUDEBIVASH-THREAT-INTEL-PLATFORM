@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -63,6 +64,80 @@ def _verified_trust(host: str, registry: Path) -> float | None:
         return round(score * 10, 2)
     except (OSError, ValueError, TypeError):
         return None
+
+
+
+_GHSA_ID = re.compile(r"^GHSA-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}$")
+
+
+def capture_ghsa_api_evidence(advisory: dict, retrieved_at: str,
+                              registry: Path = _TRUST_FILE) -> dict:
+    """Provenance from one fetched public GitHub Advisory REST record.
+
+    A digest fingerprints the *observed API JSON*, not article truth or a
+    publisher signature. One REST record is ONE evidence artifact, never two.
+    Unknown trust, missing published_at, wrong GHSA IDs and non-GitHub URLs
+    stay ineligible under the unchanged downstream prewrite gate.
+    """
+    if not isinstance(advisory, dict):
+        return {}
+    advisory_id = advisory.get("ghsa_id")
+    url = advisory.get("html_url")
+    if not isinstance(advisory_id, str) or not _GHSA_ID.fullmatch(advisory_id):
+        return {}
+    if not isinstance(url, str):
+        return {}
+    try:
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or parsed.hostname != "github.com"
+                or parsed.username is not None or parsed.password is not None
+                or parsed.port not in (None, 443)
+                or parsed.path != "/advisories/" + advisory_id
+                or parsed.query or parsed.fragment):
+            return {}
+    except ValueError:
+        return {}
+
+    observed_at = _utc_stamp(retrieved_at)
+    if not observed_at:
+        return {}
+    # Do not let Python 3.15's hour-24 normalization attest invalid source
+    # publication clocks, or use created_at as a substitute for published_at.
+    original = advisory.get("published_at")
+    if not isinstance(original, str) or not re.match(
+        r"^\d{4}-\d\d-\d\dT(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d"
+        r"(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$", original
+    ):
+        return {}
+    published_at = _utc_stamp(original)
+    if not published_at:
+        return {}
+    try:
+        pub = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        retrieval = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return {}
+    if pub > retrieval + timedelta(minutes=5):
+        return {}
+
+    digest = hashlib.sha256(json.dumps(
+        advisory, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    evidence = {
+        "source_name": "github.com",
+        "source_domain": "github.com",
+        "source_url": url,
+        "retrieval_timestamp": observed_at,
+        "publication_timestamp": published_at,
+        "content_hash": digest,
+        "content_hash_scope": "captured_ghsa_api_record_sha256",
+        "evidence_count": 1,
+        "evidence_basis": ["captured_github_advisory_api"],
+    }
+    score = _verified_trust("github.com", registry)
+    if score is not None:
+        evidence["trust_score"] = score
+    return evidence
 
 
 def capture_rss_evidence(entry: dict, feed_url: str, retrieved_at: str,
