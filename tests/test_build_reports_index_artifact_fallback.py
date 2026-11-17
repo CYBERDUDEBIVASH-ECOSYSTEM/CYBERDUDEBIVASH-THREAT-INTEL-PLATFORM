@@ -165,11 +165,15 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
     def test_artifact_fallback_when_feed_entry_lacks_enrichment_fields(self):
         self._write_report("intel--bbb2222222222222",
                             _report_html("CVE-2099-00001 Something Bad Happened", "HIGH", 7.6))
-        self._write_feed([{"id": "intel--bbb2222222222222", "timestamp": _recent_ts()}])
+        self._write_feed([{"id": "intel--bbb2222222222222",
+                           "cve_id": "CVE-2099-00001", "timestamp": _recent_ts()}])
         idx = self._run()
         entry = self._entry(idx, "intel--bbb2222222222222")
         self.assertEqual(entry["title"], "CVE-2099-00001 Something Bad Happened")
-        self.assertEqual(entry["severity"], "HIGH")
+        # The HTML's HIGH label is not source CVSS evidence. Preserve its
+        # title/risk metadata, but make the CVE severity explicitly UNRATED.
+        self.assertEqual(entry["severity"], "UNRATED")
+        self.assertEqual(entry["severity_basis"], "none")
         self.assertEqual(entry["risk_score"], 7.6)
 
     def test_artifact_fallback_works_with_plain_description_meta(self):
@@ -178,8 +182,25 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
         self._write_feed([{"id": "intel--ccc3333333333333", "timestamp": _recent_ts()}])
         idx = self._run()
         entry = self._entry(idx, "intel--ccc3333333333333")
-        self.assertEqual(entry["severity"], "MEDIUM")
+        # A plain HTML meta tag cannot become an authoritative rating when
+        # the canonical feed has no CVSS or even vulnerability evidence.
+        self.assertEqual(entry["severity"], "UNKNOWN")
         self.assertEqual(entry["risk_score"], 5.2)
+
+    def test_reported_source_cvss_overrides_conflicting_html_severity(self):
+        # Positive control: a source-reported CVSS score IS rating evidence.
+        # The HTML says CRITICAL, but 4.5 is MEDIUM and must take precedence.
+        self._write_report("intel--aabbbbaa11223344",
+                           _report_html("CVE-2099-00002 Verified Source Rating", "CRITICAL", 9.9))
+        self._write_feed([{"id": "intel--aabbbbaa11223344",
+                           "cve_id": "CVE-2099-00002", "cvss_score": 4.5,
+                           "severity": "CRITICAL", "timestamp": _recent_ts()}])
+        idx = self._run()
+        entry = self._entry(idx, "intel--aabbbbaa11223344")
+        self.assertEqual(entry["title"], "CVE-2099-00002 Verified Source Rating")
+        self.assertEqual(entry["severity"], "MEDIUM")
+        self.assertEqual(entry["severity_basis"], "cvss_reported")
+        self.assertEqual(entry["risk_score"], 9.9)
 
     # 5/8. Missing canonical record + genuinely unknown severity/risk -> honest state, no fabrication.
     def test_missing_severity_stays_honestly_unknown_not_fabricated(self):
