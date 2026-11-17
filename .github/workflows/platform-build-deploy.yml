@@ -60,7 +60,6 @@ env:
   # always looked green -- the failure only fires on an actual push to main.
   # github.repository_owner always resolves to the real owner GITHUB_TOKEN
   # is actually authorized for.
-  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/sentinel-apex
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -237,6 +236,22 @@ jobs:
       # arbitrary code with registry-push credentials. Pinned to the commit
       # SHA each tag currently resolves to; version kept in the trailing
       # comment for readability/upgrade tracking.
+      # GitHub owner logins are case-insensitive; Docker image repositories
+      # are not. Migrations may preserve an uppercase org display/login.
+      # Resolve the actual owner locally to lowercase and fail on invalid
+      # namespace syntax; do not hardcode the old or new organization.
+      - name: Resolve canonical GHCR namespace
+        id: ghcr_namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          if [[ ! "$owner" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "::error::Unexpected GitHub repository owner for GHCR"
+            exit 1
+          fi
+          printf 'prefix=ghcr.io/%s/sentinel-apex\n' "$owner" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -253,8 +268,8 @@ jobs:
           context: platform/services/${{ matrix.service }}
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: |
-            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:latest
-            ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+            ${{ steps.ghcr_namespace.outputs.prefix }}/${{ matrix.service }}:latest
+            ${{ steps.ghcr_namespace.outputs.prefix }}/${{ matrix.service }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           labels: |
