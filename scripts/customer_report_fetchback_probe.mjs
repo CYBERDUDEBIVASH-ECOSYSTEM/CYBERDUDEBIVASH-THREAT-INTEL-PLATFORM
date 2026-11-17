@@ -205,19 +205,19 @@ export function reportSeverityMatchesCatalog(html, expectedSeverity) {
 export function reportActorMatchesCatalog(html, expectedActor) {
   if (typeof html !== 'string' || typeof expectedActor !== 'string' ||
       !expectedActor.trim() || expectedActor.length > 160) return false;
-  const s1 = /<div\\s+class=['"]section['"]\\s+id=['"]s1['"]>/i.exec(html);
+  const s1 = /<div\s+class=['"]section['"]\s+id=['"]s1['"]>/i.exec(html);
   if (!s1) return false;
   const tail = html.slice(s1.index + s1[0].length);
-  const s2 = /<div\\s+class=['"]section['"]\\s+id=['"]s2['"]>/i.exec(tail);
+  const s2 = /<div\s+class=['"]section['"]\s+id=['"]s2['"]>/i.exec(tail);
   if (!s2) return false;
   const section = tail.slice(0, s2.index);
-  const field = /<div\\s+class=['"]kv-key['"]>Actor Cluster<\\/div>\\s*<div\\s+class=['"]kv-val['"]>([^<]{1,300})<\\/div>/i.exec(section);
+  const field = /<div\s+class=['"]kv-key['"]>Actor Cluster<\/div>\s*<div\s+class=['"]kv-val['"]>([^<]{1,300})<\/div>/i.exec(section);
   if (!field) return false;
   // The renderer HTML-escapes text; compare the customer-visible value.
   const visible = field[1].replace(/&amp;/gi, '&').replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>').replace(/&quot;/gi, '"')
-    .replace(/&#(?:39|x27);/gi, "'").replace(/\\s+/g, ' ').trim();
-  return visible === expectedActor.replace(/\\s+/g, ' ').trim();
+    .replace(/&#(?:39|x27);/gi, "'").replace(/\s+/g, ' ').trim();
+  return visible === expectedActor.replace(/\s+/g, ' ').trim();
 }
 
 async function readBounded(response) {
