@@ -48,7 +48,7 @@ const WI = "workers/intel-gateway/src/index.js";
 // [name, file, find, replace]  -- `find` must occur exactly once.
 const CONTROLS = [
   ["IOC total falls back to 1749", "index.html",
-    "set('eicc-m-iocs', ok ? i.iocs : 'N/A');", "set('eicc-m-iocs', ok ? (i.iocs || '1749') : 'N/A');"],
+    "set('eicc-m-iocs', ok ? na(i.iocs) : 'N/A');", "set('eicc-m-iocs', ok ? (i.iocs == null ? '1749' : i.iocs) : 'N/A');"],
   ["active feeds fall back to 74", LF,
     'stats.feeds_active != null ? stats.feeds_active : "N/A"', "stats.feeds_active || 74"],
   ["Math.random() heatmap values", "index.html",
