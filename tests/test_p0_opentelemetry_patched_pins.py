@@ -1,4 +1,4 @@
-"""P0 offline dependency-floor regression for GHSA-xcq7-p3pf-p88h.
+"""P0 offline dependency-floor regression for GHSA-mf5v-w3w3-f6cg.
 
 No network, installation, Cloudflare, billing, or customer-state operations.
 Dependency resolution and pip-audit are independent mandatory CI gates.
@@ -14,7 +14,7 @@ SERVICES = (
 )
 PINNED = {
     "opentelemetry-sdk": "1.45.2",
-    "opentelemetry-instrumentation-fastapi": "0.66b1",
+    "opentelemetry-instrumentation-fastapi": "0.66b2",
     "opentelemetry-exporter-otlp-proto-grpc": "1.45.2",
 }
 
@@ -45,7 +45,7 @@ class OpenTelemetryPatchedPinsTests(unittest.TestCase):
     def test_core_requests_instrumentation_matches_patched_family(self):
         found = pins(ROOT / "requirements.txt")
         self.assertEqual(
-            found.get("opentelemetry-instrumentation-requests"), "0.66b1"
+            found.get("opentelemetry-instrumentation-requests"), "0.66b2"
         )
 
     def test_no_explicit_vulnerable_api_pin_in_active_manifests(self):

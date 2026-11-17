@@ -31,6 +31,11 @@ OUTPUT = REPO_ROOT / "data/quality/frontend_capability_registry.json"
 # category: CUSTOMER_UI | API_ONLY | ADMIN | INTERNAL | DEPRECATED
 # status (CUSTOMER_UI only): live | orphan | form_only | static_content | interactive_docs
 CLASSIFICATIONS = {
+    # P0 2026-11-17: inspected the new, real public API-driven surfaces.
+    "command-floor.html": ("CUSTOMER_UI", "live",
+        "Public operations console backed by /api/feed and /api/v1/intel/*; degraded sources are labeled, not invented."),
+    "instagram-live-studio.html": ("CUSTOMER_UI", "live",
+        "Read-only product demo backed by /api/health and /api/preview/; no claim of paid alert delivery."),
     # -- Fixed this session --
     "sentinel-onboarding.html": ("CUSTOMER_UI", "form_only",
         "Fixed this session: removed fabricated org/tenant/API-key credentials and the false "
