@@ -45,6 +45,7 @@ REAL_SCRIPT = REPO_ROOT_REAL / "scripts" / "build_reports_index.py"
 SCRIPT_DEPENDENCIES = (
     "canonical_timestamp.py",
     "dossier_integrity.py",
+    "tlp_policy.py",
     "severity_epss_truth.py",
     "public_report_actor.py",
     "ioc_truth_engine.py",
