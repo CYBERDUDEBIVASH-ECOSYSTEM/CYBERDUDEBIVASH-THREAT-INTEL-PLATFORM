@@ -40,7 +40,16 @@ from pathlib import Path
 
 REPO_ROOT_REAL = Path(__file__).resolve().parent.parent
 REAL_SCRIPT = REPO_ROOT_REAL / "scripts" / "build_reports_index.py"
-REAL_CANONICAL_TS = REPO_ROOT_REAL / "scripts" / "canonical_timestamp.py"
+# Isolated fixture must include the script's real production import chain.
+# Keep these genuine modules, rather than replacing guards with test stubs.
+SCRIPT_DEPENDENCIES = (
+    "canonical_timestamp.py",
+    "dossier_integrity.py",
+    "severity_epss_truth.py",
+    "public_report_actor.py",
+    "ioc_truth_engine.py",
+    "attribution_evidence_engine.py",
+)
 
 
 def _recent_ts(hours_ago: float = 1) -> str:
@@ -82,11 +91,13 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="bri_test_"))
         (self.tmp / "scripts").mkdir()
         shutil.copy(REAL_SCRIPT, self.tmp / "scripts" / "build_reports_index.py")
-        # P0 R2 cost fix: build_reports_index.py now imports its sibling
-        # scripts/canonical_timestamp.py for canonical-timestamp-based
-        # windowing -- this isolated fixture copy needs it too, same as
-        # it already needed only build_reports_index.py itself before.
-        shutil.copy(REAL_CANONICAL_TS, self.tmp / "scripts" / "canonical_timestamp.py")
+        # P0 report-index regression: copy all actual sibling dependencies,
+        # including the shared dossier severity/actor authorities. Omitting
+        # them caused 11 false import failures before assertions could run.
+        for module in SCRIPT_DEPENDENCIES:
+            source = REPO_ROOT_REAL / "scripts" / module
+            self.assertTrue(source.is_file(), f"Missing required module: {source}")
+            shutil.copy(source, self.tmp / "scripts" / module)
         (self.tmp / "reports" / "2026" / "08").mkdir(parents=True)
         (self.tmp / "api" / "reports").mkdir(parents=True)
 
