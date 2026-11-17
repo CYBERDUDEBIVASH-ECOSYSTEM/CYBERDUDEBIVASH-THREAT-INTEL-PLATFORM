@@ -1,0 +1,179 @@
+{
+  "type": "bundle",
+  "id": "bundle--3dde403d-b4fd-434e-bf1c-2dc52e59f986",
+  "spec_version": "2.1",
+  "objects": [
+    {
+      "type": "identity",
+      "spec_version": "2.1",
+      "id": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "name": "CyberDudeBivash SENTINEL APEX",
+      "description": "CyberDudeBivash Pvt. Ltd. - Global Cybersecurity Intelligence Infrastructure",
+      "identity_class": "organization",
+      "sectors": [
+        "technology"
+      ],
+      "contact_information": "contact@cyberdudebivash.in",
+      "created": "2024-01-01T00:00:00Z",
+      "modified": "2024-01-01T00:00:00Z"
+    },
+    {
+      "type": "marking-definition",
+      "spec_version": "2.1",
+      "id": "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed",
+      "created": "2017-01-20T00:00:00.000Z",
+      "definition_type": "tlp",
+      "definition": {
+        "tlp": "red"
+      }
+    },
+    {
+      "type": "intrusion-set",
+      "spec_version": "2.1",
+      "id": "intrusion-set--21db4d3c-13a6-4666-86a7-507c3ccf8edd",
+      "name": "CDB-CN-01 Campaign",
+      "description": "Hackers Exploit Unpatched Microsoft Exchange Servers to Deploy Custom RATs Across Southeast Asia",
+      "created": "2026-11-17T17:24:02Z",
+      "modified": "2026-11-17T17:24:02Z",
+      "confidence": 67,
+      "aliases": [
+        "CDB-CN-01"
+      ],
+      "extensions": {
+        "x-cdb-apex-1": {
+          "predictive_score": 10.0,
+          "campaign_id": "UNCLASSIFIED",
+          "campaign_confidence": 10.0,
+          "threat_category": "Phishing",
+          "behavioral_tags": [
+            "registry_persistence",
+            "credential_stealing"
+          ],
+          "ai_summary": "Initial access via phishing → execution chain: initial access → persistence → credential access → lateral movement → malware behaviors: registry persistence, credential stealing",
+          "risk_factors": [
+            "IOC_density",
+            "MITRE_coverage"
+          ],
+          "soc_priority": "P1",
+          "threat_level": "MEDIUM",
+          "recommended_action": "Risk 10.0/10 — 79 IOCs extracted",
+          "x_cdb_published_at": "2026-11-17T14:24:16Z",
+          "x_cdb_source_url": "https://cybersecuritynews.com/microsoft-exchange-servers/",
+          "x_cdb_source_name": "cybersecuritynews.com",
+          "x_cdb_retrieval_timestamp": "2026-11-17T17:23:42Z",
+          "x_cdb_publication_timestamp": "2026-11-17T14:24:16Z",
+          "x_cdb_content_hash": "70cdc834f49637eb374c9d53cfcf96ed5e089e97e7db93197aace7c5f087d3a1",
+          "x_cdb_content_hash_scope": "rss_entry_fields_sha256",
+          "x_cdb_evidence_count": 1,
+          "x_cdb_evidence_basis": [
+            "captured_rss_entry"
+          ],
+          "x_cdb_trust_score": 5.61
+        }
+      },
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--8e7cff25-82fc-4445-ae5c-c0b4f487a569",
+      "name": "Valid Accounts",
+      "created": "2026-11-17T17:24:02Z",
+      "modified": "2026-11-17T17:24:02Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1078",
+          "url": "https://attack.mitre.org/techniques/T1078/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--e7be9a27-f280-49f6-8dba-b1845a52fa80",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--21db4d3c-13a6-4666-86a7-507c3ccf8edd",
+      "target_ref": "attack-pattern--8e7cff25-82fc-4445-ae5c-c0b4f487a569",
+      "created": "2026-11-17T17:24:02Z",
+      "modified": "2026-11-17T17:24:02Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--c7996063-5ecd-4a94-911e-d73904a11f2b",
+      "name": "Phishing",
+      "created": "2026-11-17T17:24:02Z",
+      "modified": "2026-11-17T17:24:02Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1566",
+          "url": "https://attack.mitre.org/techniques/T1566/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--e2720602-6cfb-4244-84e6-228965012e7c",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--21db4d3c-13a6-4666-86a7-507c3ccf8edd",
+      "target_ref": "attack-pattern--c7996063-5ecd-4a94-911e-d73904a11f2b",
+      "created": "2026-11-17T17:24:02Z",
+      "modified": "2026-11-17T17:24:02Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--0c922a63-a160-413c-95ac-fba07c90dc0a",
+      "name": "Exploitation for Client Execution",
+      "created": "2026-11-17T17:24:02Z",
+      "modified": "2026-11-17T17:24:02Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1203",
+          "url": "https://attack.mitre.org/techniques/T1203/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--a327f120-4690-43e2-9fab-5f85e05cf797",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--21db4d3c-13a6-4666-86a7-507c3ccf8edd",
+      "target_ref": "attack-pattern--0c922a63-a160-413c-95ac-fba07c90dc0a",
+      "created": "2026-11-17T17:24:02Z",
+      "modified": "2026-11-17T17:24:02Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    }
+  ]
+}
