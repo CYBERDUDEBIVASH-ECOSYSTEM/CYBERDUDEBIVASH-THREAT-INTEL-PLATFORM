@@ -169,7 +169,10 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
         idx = self._run()
         entry = self._entry(idx, "intel--bbb2222222222222")
         self.assertEqual(entry["title"], "CVE-2099-00001 Something Bad Happened")
-        self.assertEqual(entry["severity"], "HIGH")
+        # Risk 7.6/10 in HTML is an APEX score, NOT CVSS provenance.
+        # Vulnerability severity must remain UNRATED without real CVSS.
+        self.assertEqual(entry["severity"], "UNRATED")
+        self.assertEqual(entry["severity_basis"], "none")
         self.assertEqual(entry["risk_score"], 7.6)
 
     def test_artifact_fallback_works_with_plain_description_meta(self):
@@ -179,6 +182,7 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
         idx = self._run()
         entry = self._entry(idx, "intel--ccc3333333333333")
         self.assertEqual(entry["severity"], "MEDIUM")
+        self.assertEqual(entry["severity_basis"], "apex_heuristic")
         self.assertEqual(entry["risk_score"], 5.2)
 
     # 5/8. Missing canonical record + genuinely unknown severity/risk -> honest state, no fabrication.
@@ -314,6 +318,34 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
         idx = self._run()
         self.assertIsNone(self._entry(idx, report_id)["epss_score"])
 
+
+    def test_cvss_evidence_overrides_html_heuristic_severity(self):
+        report_id = "intel--abc4444444444444"
+        self._write_report(report_id,
+                           _report_html("CVE-2026-12345 Verified Risk", "CRITICAL", 9.8))
+        self._write_feed([{
+            "id": report_id, "timestamp": _recent_ts(),
+            "cvss_score": 5.2,
+        }])
+        idx = self._run()
+        entry = self._entry(idx, report_id)
+        self.assertEqual(entry["severity"], "MEDIUM")
+        self.assertEqual(entry["severity_basis"], "cvss_reported")
+        # Distinct proprietary risk score remains in its separate field.
+        self.assertEqual(entry["risk_score"], 9.8)
+
+    def test_cve_in_feed_title_is_unrated_without_cvss_even_with_html_severity(self):
+        report_id = "intel--abc5555555555555"
+        self._write_report(report_id,
+                           _report_html("CVE-2026-98765 Missing CVSS", "HIGH", 7.8))
+        self._write_feed([{
+            "id": report_id, "timestamp": _recent_ts(),
+            "title": "CVE-2026-98765 Missing CVSS", "severity": "HIGH",
+        }])
+        idx = self._run()
+        entry = self._entry(idx, report_id)
+        self.assertEqual(entry["severity"], "UNRATED")
+        self.assertEqual(entry["severity_basis"], "none")
 
 
 class TestSingleWriterOwnership(unittest.TestCase):
