@@ -204,6 +204,7 @@ class TestTrustedIntelEgress(unittest.TestCase):
             msc._admitted_intel_host("https://otx.alienvault.com/api/v1/pulses/subscribed"),
             "otx.alienvault.com",
         )
+        self.assertEqual(msc._admitted_intel_host("https://mb-api.abuse.ch/api/v1/"), "mb-api.abuse.ch")
         for url in (
             "http://api.github.com/advisories",
             "file:///etc/passwd",
@@ -258,6 +259,30 @@ class TestTrustedIntelEgress(unittest.TestCase):
             with self.assertRaises(ValueError):
                 msc._open_trusted_intel(bad, timeout=3)
             build.assert_not_called()
+
+
+class TestMalwareBazaarTrustedPost(unittest.TestCase):
+    def test_post_enforces_bounded_read_and_preserves_method(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+                self.limit = None
+            def __enter__(self): return self
+            def __exit__(self, *unused): return False
+            def read(self, limit):
+                self.limit = limit
+                return self.payload[:limit]
+        valid = FakeResponse(b'{"query_status":"ok","data":[]}')
+        with patch.object(msc, "_open_trusted_intel", return_value=valid) as op:
+            self.assertEqual(msc.collect_malwarebazaar(), [])
+            request = op.call_args.args[0]
+            self.assertEqual(request.get_method(), "POST")
+            self.assertEqual(request.full_url, "https://mb-api.abuse.ch/api/v1/")
+            self.assertEqual(valid.limit, msc.MAX_SOURCE_RESPONSE_BYTES + 1)
+        oversized = FakeResponse(b'x' * (msc.MAX_SOURCE_RESPONSE_BYTES + 1))
+        with patch.object(msc, "_open_trusted_intel", return_value=oversized):
+            self.assertEqual(msc.collect_malwarebazaar(), [])
+        self.assertEqual(oversized.limit, msc.MAX_SOURCE_RESPONSE_BYTES + 1)
 
 
 if __name__ == "__main__":
