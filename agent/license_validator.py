@@ -15,19 +15,14 @@ class CDBLicenseValidator:
         self._initialize_registry()
 
     def _initialize_registry(self):
-        os.makedirs("data/sovereign", exist_ok=True)
-        if not os.path.exists(self.tenant_store):
-            # Default Enterprise Beta Key for initial deployment
-            initial_data = {
-                "CDB-ENT-2026-ALPHA": {
-                    "tier": "enterprise",
-                    "status": "active",
-                    "expires": "2027-01-01T00:00:00",
-                    "owner": "Bivash"
-                }
-            }
-            with open(self.tenant_store, "w") as f:
-                json.dump(initial_data, f, indent=4)
+        """Do not create credentials during import or on missing state.
+
+        A missing, unreadable or unprovisioned registry is an authorization
+        failure, not a reason to seed a predictable Enterprise credential.
+        Validated provisioning must create the registry through an explicitly
+        authenticated, auditable path. Existing persisted keys are unchanged.
+        """
+        return None
 
     def is_valid(self, api_key: str) -> bool:
         """Validates API Key against the Sovereign Registry."""
