@@ -61,6 +61,21 @@ test('metric truth boundary never manufactures CVSS from risk_score or contamina
   assert.equal(hasExplicitCvss(explicitZero), true);
 });
 
+test('API score truth: invalid typed values never become measured CVSS or risk zero', () => {
+  for (const candidate of ['', ' ', '\\t', false, true, [], [0], {}, '0x0', '7.5junk', 'Infinity', '-1', '11']) {
+    assert.equal(explicitCvss({ cvss_score: candidate }), null, String(candidate));
+    assert.equal(explicitRiskScore({ risk_score: candidate }), null, String(candidate));
+  }
+  assert.equal(explicitCvss({ cvss_score: '0' }), 0);
+  assert.equal(explicitCvss({ cvss_score: '7.4' }), 7.4);
+  assert.equal(explicitRiskScore({ risk_score: '9.25' }), 9.25);
+  assert.equal(explicitRiskScore({ risk_score: false, threat_score: '8.1' }), 8.1);
+  assert.equal(explicitCvss({ cvss_score: '  ', cvss: 7.2 }), 7.2);
+  assert.deepEqual(metricTruth({ cvss_score: false, risk_score: [] }), {
+    cvss: null, risk_score: null, cvss_is_explicit: false, risk_is_cvss: false,
+  });
+});
+
 test('customer-facing P25-P33 surfaces do not relabel composite risk as CVSS', () => {
   const surfaces = [
     buildAnalystExplainabilityBlock(riskOnly),

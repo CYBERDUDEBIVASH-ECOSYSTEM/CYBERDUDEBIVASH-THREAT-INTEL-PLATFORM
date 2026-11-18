@@ -151,12 +151,18 @@
     // health 'fresh' claim nor a feed-contract label can authorize old data.
     var feedTime = Date.parse(feed && feed.generated_at || '');
     var maxAgeMs = 6 * 3600 * 1000;
+    var maxFutureSkewMs = 5 * 60 * 1000; // clock skew only; never project future intelligence
     var feedAgeMs = now - feedTime;
-    var feedTimeValid = isFinite(feedTime) && feedAgeMs <= maxAgeMs && feedAgeMs >= -3 * 3600 * 1000;
-    var healthTimeValid = isFinite(genMs) && now - genMs <= maxAgeMs && now - genMs >= -3 * 3600 * 1000;
-    pub.fresh = pub.status === 'fresh' && feedTimeValid && healthTimeValid &&
+    var feedTimeValid = isFinite(feedTime) && feedAgeMs <= maxAgeMs && feedAgeMs >= -maxFutureSkewMs;
+    var healthTimeValid = isFinite(genMs) && now - genMs <= maxAgeMs && now - genMs >= -maxFutureSkewMs;
+    // The published count is part of the authoritative feed contract. A
+    // malformed or inconsistent count must never show misleading live totals.
+    var countValid = !feed || !Object.prototype.hasOwnProperty.call(feed, 'count') ||
+      (Number.isSafeInteger(feed.count) && feed.count >= 0 && feed.count === items.length);
+    pub.fresh = pub.status === 'fresh' && feedTimeValid && healthTimeValid && countValid &&
       !(feed && typeof feed.freshness_status === 'string' && feed.freshness_status.toUpperCase() !== 'FRESH') &&
       !healthFail && !feedFail;
+    if (!countValid) pub.reason = 'FEED_COUNT_MISMATCH';
     // No expired intelligence may enter the ticker, metrics or preview.
     if (!pub.fresh) items = [];
 
@@ -166,8 +172,13 @@
       if (s === 'CRITICAL') critical++;
       if (s === 'HIGH') high++;
       iocs += iocContribution(it);
-      var r = parseFloat(it.risk_score);
-      if (isFinite(r)) { riskSum += r; riskN++; }
+      // Strict decimal semantics shared with the Worker metric-truth layer:
+      // parseFloat("9.8junk") and out-of-range scores are not measurements.
+      var rawRisk = it.risk_score;
+      var validRisk = typeof rawRisk === 'number' ||
+        (typeof rawRisk === 'string' && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(rawRisk.trim()));
+      var r = validRisk ? Number(rawRisk) : NaN;
+      if (Number.isFinite(r) && r >= 0 && r <= 10) { riskSum += r; riskN++; }
       var h = sourceHost(it);
       if (h) sources[h] = (sources[h] || 0) + 1;
     });

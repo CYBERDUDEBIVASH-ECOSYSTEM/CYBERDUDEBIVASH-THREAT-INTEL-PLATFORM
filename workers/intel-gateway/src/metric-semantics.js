@@ -8,6 +8,11 @@
 
 function finiteInRange(value, min, max) {
   if (value === null || value === undefined || value === '') return null;
+  // Number(" "), Number(false) and Number([]) all become 0. That silently
+  // turns a missing/invalid CVSS or risk score into a measured zero.
+  // Accept only finite numeric inputs or explicit decimal numeric strings.
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  if (typeof value === "string" && !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value.trim())) return null;
   const n = Number(value);
   return Number.isFinite(n) && n >= min && n <= max ? n : null;
 }

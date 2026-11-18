@@ -199,3 +199,44 @@ test('missing or future feed-generation time denies live dashboard projection', 
     assert.equal(s.feed.items.length, 0);
   }
 });
+
+test('future-dated health and feed cannot masquerade as live intelligence', () => {
+  const inTwoHours = new Date(NOW + 2 * 3600 * 1000).toISOString();
+  const s = Snap.build(health('fresh', inTwoHours), feedOf(5, {
+    generated_at: inTwoHours, freshness_status: 'FRESH',
+  }), NOW);
+  assert.equal(s.mode, 'degraded');
+  assert.equal(s.intelligence.total, null);
+  assert.deepEqual(Snap.tickerView(s).items, []);
+  // Small, non-negative operational clock skew remains supported.
+  const smallSkew = new Date(NOW + 2 * 60 * 1000).toISOString();
+  const allowed = Snap.build(health('fresh', smallSkew),
+    feedOf(5, { generated_at: smallSkew, freshness_status: 'FRESH' }), NOW);
+  assert.equal(allowed.mode, 'live');
+});
+
+test('inconsistent or malformed feed count fails closed across dashboard widgets', () => {
+  for (const bad of [99, -1, '3', NaN, 3.5]) {
+    const s = Snap.build(health('fresh'), feedOf(3, { count: bad }), NOW);
+    assert.equal(s.mode, 'degraded');
+    assert.equal(s.publication.reason, 'FEED_COUNT_MISMATCH');
+    assert.equal(s.intelligence.total, null);
+    assert.equal(s.intelligence.iocs, null);
+    assert.deepEqual(Snap.previewItems(s, 5), []);
+  }
+  const good = Snap.build(health('fresh'), feedOf(3, { count: 3 }), NOW);
+  assert.equal(good.mode, 'live');
+  assert.equal(good.intelligence.total, 3);
+});
+
+test('dashboard risk average ignores coercion, malformed and out-of-range scores', () => {
+  const feed = feedOf(5);
+  feed.data.items.forEach((item, i) => {
+    item.risk_score = ['9.9junk', false, 50, '  ', '7.5'][i];
+  });
+  const s = Snap.build(health('fresh'), feed, NOW);
+  assert.equal(s.intelligence.avg_risk, 7.5);
+  const noValid = feedOf(3);
+  noValid.data.items.forEach(x => { x.risk_score = '9.4-trailing'; });
+  assert.equal(Snap.build(health('fresh'), noValid, NOW).intelligence.avg_risk, null);
+});
