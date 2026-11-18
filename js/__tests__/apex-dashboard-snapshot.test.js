@@ -200,15 +200,15 @@ test('missing or future feed-generation time denies live dashboard projection', 
   }
 });
 
-test('future-dated health and feed cannot masquerade as live intelligence', () => {
-  const inTwoHours = new Date(NOW + 2 * 3600 * 1000).toISOString();
+test('future timestamps beyond the shared Worker/Python 3h contract are withheld', () => {
+  const inTwoHours = new Date(NOW + 4 * 3600 * 1000).toISOString();
   const s = Snap.build(health('fresh', inTwoHours), feedOf(5, {
     generated_at: inTwoHours, freshness_status: 'FRESH',
   }), NOW);
   assert.equal(s.mode, 'degraded');
   assert.equal(s.intelligence.total, null);
   assert.deepEqual(Snap.tickerView(s).items, []);
-  // Small, non-negative operational clock skew remains supported.
+  // Small operational clock skew remains supported by the shared contract.
   const smallSkew = new Date(NOW + 2 * 60 * 1000).toISOString();
   const allowed = Snap.build(health('fresh', smallSkew),
     feedOf(5, { generated_at: smallSkew, freshness_status: 'FRESH' }), NOW);
@@ -239,4 +239,23 @@ test('dashboard risk average ignores coercion, malformed and out-of-range scores
   const noValid = feedOf(3);
   noValid.data.items.forEach(x => { x.risk_score = '9.4-trailing'; });
   assert.equal(Snap.build(health('fresh'), noValid, NOW).intelligence.avg_risk, null);
+});
+test('dashboard timestamp validation matches canonical explicit-offset and calendar rules', () => {
+  for (const invalid of [
+    '2026-09-24T20:08:53', '2026-02-30T20:08:53Z',
+    '2026-09-24T24:00:00Z', '2026-13-01T20:08:53Z',
+    'Thu, 24 Sep 2026 20:08:53 GMT',
+  ]) {
+    const s = Snap.build(health('fresh', invalid), feedOf(2, {
+      generated_at: invalid, freshness_status: 'FRESH',
+    }), NOW);
+    assert.equal(s.mode, 'degraded', invalid);
+    assert.equal(s.intelligence.total, null, invalid);
+    assert.equal(Snap.lastSyncView(s).utc, null, invalid);
+  }
+  const offset = '2026-09-25T01:38:53+05:30';
+  const good = Snap.build(health('fresh', offset),
+    feedOf(2, { generated_at: offset, freshness_status: 'FRESH' }), NOW);
+  assert.equal(good.mode, 'live');
+  assert.equal(Snap.lastSyncView(good).utc, '2026-09-24 20:08 UTC');
 });
