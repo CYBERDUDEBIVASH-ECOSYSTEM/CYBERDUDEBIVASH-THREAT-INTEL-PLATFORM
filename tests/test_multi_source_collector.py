@@ -143,3 +143,28 @@ class TestFeedCapEnforcement(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class TestUntrustedRssXmlParser(unittest.TestCase):
+    def test_valid_rss_without_dtd_parses_normally(self):
+        root = msc._parse_rss_xml("<rss><channel><item><title>Test</title></item></channel></rss>")
+        self.assertEqual(root.findtext(".//item/title"), "Test")
+
+    def test_doctype_and_entity_declarations_fail_closed(self):
+        for xml in (
+            '<!DOCTYPE rss [<!ENTITY ex "unsafe">]><rss><item>&ex;</item></rss>',
+            '<!DOCTYPE rss SYSTEM "file:///etc/passwd"><rss/>',
+            '<!ENTITY malicious "unsafe"><rss/>',
+        ):
+            with self.subTest(xml=xml[:24]), self.assertRaisesRegex(ValueError, "XML_DTD_ENTITY_FORBIDDEN"):
+                msc._parse_rss_xml(xml)
+
+    def test_oversize_xml_rejected_before_parser(self):
+        payload = "<rss>" + ("a" * (msc.RSS_XML_MAX_BYTES + 1)) + "</rss>"
+        with self.assertRaisesRegex(ValueError, "XML_SOURCE_SIZE_LIMIT"):
+            msc._parse_rss_xml(payload)
+
+    def test_malformed_feed_is_not_silently_accepted(self):
+        with self.assertRaises(Exception):
+            msc._parse_rss_xml("<rss><item></rss>")
