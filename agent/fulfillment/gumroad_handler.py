@@ -51,6 +51,14 @@ class GumroadFulfillment:
             logging.warning("Fulfillment Declined: Missing or unapproved purchase authority")
             return None
 
+        # Existing tenant manager has no verified-sale, durably idempotent
+        # writer. Do not even query the provider until that authority exists:
+        # a valid license lookup alone is not a new payment/receipt.
+        trusted_writer = getattr(SUBSCRIPTION_CORE, "provision_verified_sale", None)
+        if not callable(trusted_writer):
+            logging.error("P0_FULFILLMENT_HOLD: Durable verified-sale writer unavailable")
+            return None
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -88,12 +96,17 @@ class GumroadFulfillment:
                 logging.warning("Fulfillment Declined: Provider purchaser mismatch")
                 return None
 
-            # Source check is NOT durable replay prevention; this must remain
-            # a release HOLD until sale-id uniqueness is enforced transactionally.
-            new_api_key = SUBSCRIPTION_CORE.provision_tenant(
-                name=provider_email, tier="enterprise",
+            # Contract: the trusted writer must enforce atomic sale_id
+            # uniqueness, durable entitlement persistence and safe replay
+            # semantics before returning the newly issued credential.
+            new_api_key = trusted_writer(
+                sale_id=event_sale, product_id=expected_product,
+                owner=provider_email, tier="enterprise",
             )
-            logging.info("Fulfillment: Provider purchase verified and credential created")
+            if not isinstance(new_api_key, str) or not new_api_key:
+                logging.error("P0_FULFILLMENT_HOLD: Verified-sale writer returned no credential")
+                return None
+            logging.info("Fulfillment: Verified sale durably provisioned")
             return new_api_key
         except Exception as exc:
             # Provider errors and storage failures must not leak license, key,
