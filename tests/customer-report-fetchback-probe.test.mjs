@@ -296,3 +296,30 @@ test('missing or invalid public actor metadata cannot certify customer report',(
   c.reports=[{...one,actor_tag:'a'.repeat(161)},two];
   assert.ok(evaluatePublicReportCatalog(c).issues.includes('INVALID_PUBLIC_REPORT_ACTOR_METADATA'));
 });
+
+// P0 2026-11-18: failure classification must be actionable and non-leaking;
+// no relaxation of the admission gate, no extra R2/HTTP requests.
+test('failed customer report fetch-back identifies HTTP denial without clearing the release block',async()=>{
+  const r=await runPublicReportFetchback({fetchFn:fake(catalog(),{
+    [one.path]:response('not found',404,'text/plain')
+  })});
+  assert.equal(r.verdict,'BLOCKED_REPORT_FETCHBACK');
+  assert.equal(r.customer_release_certified,false);
+  assert.deepEqual(r.probes[0],{path:one.path,status:'FAIL',reason:'HTTP_404'});
+});
+test('report metadata divergence remains a hard failure with a bounded reason code',async()=>{
+  const c=catalog();c.reports=[{...one,severity:'CRITICAL'},two];
+  const r=await runPublicReportFetchback({fetchFn:fake(c)});
+  assert.equal(r.exit_code,2);
+  assert.equal(r.probes[0].reason,'REPORT_SEVERITY_METADATA_DIVERGENCE');
+});
+test('untrusted fetch exception details never enter public probe output',async()=>{
+  const original=fake(catalog());
+  const r=await runPublicReportFetchback({fetchFn:async (url,options)=>{
+    if (url===ORIGIN+CATALOG_PATH) return original(url,options);
+    throw new Error('secret-token-never-print');
+  }});
+  assert.equal(r.verdict,'BLOCKED_REPORT_FETCHBACK');
+  assert.equal(r.probes[0].reason,'UNCLASSIFIED_FETCH_FAILURE');
+  assert.ok(!JSON.stringify(r).includes('secret-token-never-print'));
+});

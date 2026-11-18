@@ -1014,11 +1014,22 @@ def report_catalog_chronology_precheck() -> bool:
             if path.stat().st_size > 2_000_000:
                 return False
             payloads[path.name] = json.loads(path.read_text(encoding="utf-8"))
-        if audit_catalog(payloads["index.json"]).get("verdict") != "CHRONOLOGY_PRECHECK_ONLY":
+        chronology = audit_catalog(payloads["index.json"])
+        if chronology.get("verdict") != "CHRONOLOGY_PRECHECK_ONLY":
+            # Defects are controlled validator messages, not raw report data.
+            log.error("P0 report catalog chronology rejected (%d defects): %s",
+                      len(chronology.get("defects", [])),
+                      "; ".join(str(v)[:140] for v in chronology.get("defects", [])[:3]))
             return False
-        return audit_registry(
+        registry = audit_registry(
             payloads["index.json"], payloads["latest.json"], payloads["stats.json"]
-        ).get("verdict") == "ARTIFACT_CONSISTENCY_ONLY"
+        )
+        if registry.get("verdict") != "ARTIFACT_CONSISTENCY_ONLY":
+            log.error("P0 report registry rejected (%d defects): %s",
+                      len(registry.get("defects", [])),
+                      "; ".join(str(v)[:140] for v in registry.get("defects", [])[:3]))
+            return False
+        return True
     except (OSError, UnicodeError, ValueError, TypeError, ImportError, RecursionError):
         return False
 

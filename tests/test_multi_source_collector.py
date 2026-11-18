@@ -141,5 +141,160 @@ class TestFeedCapEnforcement(unittest.TestCase):
         )
 
 
+
+
+class TestUntrustedRssXmlParser(unittest.TestCase):
+    def test_valid_rss_without_dtd_parses_normally(self):
+        root = msc._parse_rss_xml("<rss><channel><item><title>Test</title></item></channel></rss>")
+        self.assertEqual(root.findtext(".//item/title"), "Test")
+
+    def test_doctype_and_entity_declarations_fail_closed(self):
+        for xml in (
+            '<!DOCTYPE rss [<!ENTITY ex "unsafe">]><rss><item>&ex;</item></rss>',
+            '<!DOCTYPE rss SYSTEM "file:///etc/passwd"><rss/>',
+            '<!ENTITY malicious "unsafe"><rss/>',
+        ):
+            with self.subTest(xml=xml[:24]), self.assertRaisesRegex(ValueError, "XML_DTD_ENTITY_FORBIDDEN"):
+                msc._parse_rss_xml(xml)
+
+    def test_oversize_xml_rejected_before_parser(self):
+        payload = "<rss>" + ("a" * (msc.RSS_XML_MAX_BYTES + 1)) + "</rss>"
+        with self.assertRaisesRegex(ValueError, "XML_SOURCE_SIZE_LIMIT"):
+            msc._parse_rss_xml(payload)
+
+    def test_malformed_feed_is_not_silently_accepted(self):
+        with self.assertRaises(msc.ET.ParseError):
+            msc._parse_rss_xml("<rss><item></rss>")
+
+
+class TestUntrustedSourceResponseCap(unittest.TestCase):
+    def test_http_reader_has_hard_maximum_and_rejects_oversize(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+                self.read_bound = None
+                self.headers = {"Content-Type": "application/json"}
+            def __enter__(self): return self
+            def __exit__(self, *unused): return False
+            def read(self, limit=-1):
+                self.read_bound = limit
+                return self.payload[:limit]
+        fake = FakeResponse(b"a" * (msc.MAX_SOURCE_RESPONSE_BYTES + 1))
+        with patch.object(msc, "_open_trusted_intel", return_value=fake):
+            result = msc._get("https://api.github.com/advisories")
+        self.assertIsNone(result)
+        self.assertEqual(fake.read_bound, msc.MAX_SOURCE_RESPONSE_BYTES + 1)
+
+    def test_http_reader_retains_valid_small_json(self):
+        class FakeResponse:
+            headers = {"Content-Type": "application/json"}
+            def __enter__(self): return self
+            def __exit__(self, *unused): return False
+            def read(self, limit=-1): return b'{"ok":true}'[:limit]
+        with patch.object(msc, "_open_trusted_intel", return_value=FakeResponse()):
+            self.assertEqual(msc._get("https://api.github.com/advisories"), {"ok": True})
+
+class TestTrustedIntelEgress(unittest.TestCase):
+    def test_only_explicit_https_upstream_origins_are_admitted(self):
+        self.assertEqual(
+            msc._admitted_intel_host("https://api.github.com/advisories?per_page=30"),
+            "api.github.com",
+        )
+        self.assertEqual(
+            msc._admitted_intel_host("https://otx.alienvault.com/api/v1/pulses/subscribed"),
+            "otx.alienvault.com",
+        )
+        self.assertEqual(msc._admitted_intel_host("https://mb-api.abuse.ch/api/v1/"), "mb-api.abuse.ch")
+        for url in (
+            "http://api.github.com/advisories",
+            "file:///etc/passwd",
+            "https://127.0.0.1/admin",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://[::1]/admin",
+            "https://localhost/",
+            "https://api.github.com.evil.test/advisories",
+            "https://user:secret@api.github.com/advisories",
+            "https://api.github.com:8443/advisories",
+            "https://api.github.com/advisories#fragment",
+        ):
+            with self.subTest(url=url), self.assertRaisesRegex(ValueError, "SOURCE_URL_NOT_ALLOWED"):
+                msc._admitted_intel_host(url)
+
+    def test_auth_origin_redirect_never_crosses_host(self):
+        handler = msc._PinnedOriginRedirect("api.github.com")
+        req = msc.urllib.request.Request(
+            "https://api.github.com/advisories",
+            headers={"Authorization": "Bearer should-not-leak"},
+        )
+        for redirected in (
+            "https://169.254.169.254/latest/meta-data/",
+            "https://evil.example/collector",
+            "https://otx.alienvault.com/api/v1/pulses/subscribed",
+            "http://api.github.com/advisories",
+        ):
+            with self.subTest(redirected=redirected), self.assertRaises(msc.urllib.error.HTTPError):
+                handler.redirect_request(req, None, 302, "Found", {}, redirected)
+        retained = handler.redirect_request(
+            req, None, 302, "Found", {}, "https://api.github.com/advisories?page=2"
+        )
+        self.assertEqual(retained.full_url, "https://api.github.com/advisories?page=2")
+
+    def test_approved_opener_is_used_without_outbound_io(self):
+        class FakeOpener:
+            def open(self, req, timeout):
+                self.last_url = req.full_url
+                self.last_timeout = timeout
+                return object()
+        fake = FakeOpener()
+        with patch.object(msc.urllib.request, "build_opener", return_value=fake) as build:
+            req = msc.urllib.request.Request("https://api.github.com/advisories")
+            msc._open_trusted_intel(req, timeout=3)
+            self.assertEqual(fake.last_url, req.full_url)
+            self.assertEqual(fake.last_timeout, 3)
+            handler = build.call_args.args[0]
+            self.assertEqual(handler.original_host, "api.github.com")
+        # Disallowed inputs must reject before an opener is constructed.
+        with patch.object(msc.urllib.request, "build_opener") as build:
+            bad = msc.urllib.request.Request("https://127.0.0.1/admin")
+            with self.assertRaises(ValueError):
+                msc._open_trusted_intel(bad, timeout=3)
+            build.assert_not_called()
+
+
+    def test_untrusted_network_exceptions_and_query_tokens_are_not_logged(self):
+        with patch.object(msc, "_open_trusted_intel",
+                          side_effect=ValueError("Bearer PRIVATE-UNTRUSTED-TEXT")):
+            with self.assertLogs("COLLECTOR", level="WARNING") as captured:
+                self.assertIsNone(msc._get("https://api.github.com/advisories?secret=SENSITIVE"))
+        output = " | ".join(captured.output)
+        self.assertNotIn("SENSITIVE", output)
+        self.assertNotIn("PRIVATE-UNTRUSTED-TEXT", output)
+        self.assertNotIn("advisories?secret=", output)
+
+
+class TestMalwareBazaarTrustedPost(unittest.TestCase):
+    def test_post_enforces_bounded_read_and_preserves_method(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+                self.limit = None
+            def __enter__(self): return self
+            def __exit__(self, *unused): return False
+            def read(self, limit):
+                self.limit = limit
+                return self.payload[:limit]
+        valid = FakeResponse(b'{"query_status":"ok","data":[]}')
+        with patch.object(msc, "_open_trusted_intel", return_value=valid) as op:
+            self.assertEqual(msc.collect_malwarebazaar(), [])
+            request = op.call_args.args[0]
+            self.assertEqual(request.get_method(), "POST")
+            self.assertEqual(request.full_url, "https://mb-api.abuse.ch/api/v1/")
+            self.assertEqual(valid.limit, msc.MAX_SOURCE_RESPONSE_BYTES + 1)
+        oversized = FakeResponse(b'x' * (msc.MAX_SOURCE_RESPONSE_BYTES + 1))
+        with patch.object(msc, "_open_trusted_intel", return_value=oversized):
+            self.assertEqual(msc.collect_malwarebazaar(), [])
+        self.assertEqual(oversized.limit, msc.MAX_SOURCE_RESPONSE_BYTES + 1)
+
+
 if __name__ == "__main__":
     unittest.main()

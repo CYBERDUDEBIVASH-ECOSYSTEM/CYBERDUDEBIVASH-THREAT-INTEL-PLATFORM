@@ -57,8 +57,10 @@ ENV:
 """
 from __future__ import annotations
 import json, logging, os, re, sys, time, hashlib, urllib.request, urllib.error
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # ParseError compatibility for callers
+from defusedxml import ElementTree as _SafeET
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 from pathlib import Path
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -86,6 +88,29 @@ CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.I)
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# P0 HIGH/HIGH B314: public RSS sources are untrusted XML. Reject DTD/ENTITY
+# declarations and oversized payloads before expat receives any bytes.
+# Enforce parser-level DTD/entity/external-reference protection via defusedxml.
+# The explicit size cap and declaration precheck are complementary guards.
+MAX_SOURCE_RESPONSE_BYTES = 8 * 1024 * 1024
+RSS_XML_MAX_BYTES = 2 * 1024 * 1024
+_XML_DECLARATION_FORBIDDEN = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.I)
+
+
+def _parse_rss_xml(raw: str):
+    if not isinstance(raw, str):
+        raise ValueError("XML_SOURCE_NOT_TEXT")
+    if len(raw.encode("utf-8")) > RSS_XML_MAX_BYTES:
+        raise ValueError("XML_SOURCE_SIZE_LIMIT")
+    if _XML_DECLARATION_FORBIDDEN.search(raw):
+        raise ValueError("XML_DTD_ENTITY_FORBIDDEN")
+    return _SafeET.fromstring(
+        raw, forbid_dtd=True, forbid_entities=True, forbid_external=True
+    )
+
+
 
 
 def _gen_id(title: str, ts: str) -> str:
@@ -132,20 +157,79 @@ def _observe_rss_item(item, entry, feed_url, retrieved_at, feed_labels):
                             "label_origin": "observed_rss_metadata"} for label in labels]
 
 
+# Explicit upstream admission prevents an intelligence feed or redirect from
+# reaching runner metadata, loopback, or a credential-bearing off-origin host.
+# The eight sites cover the seven _get() feeds and the MalwareBazaar POST.
+TRUSTED_INTEL_HOSTS = frozenset({
+    "api.github.com", "www.cisa.gov", "urlhaus-api.abuse.ch",
+    "www.bleepingcomputer.com", "securityaffairs.com",
+    "cybersecuritynews.com", "otx.alienvault.com", "mb-api.abuse.ch",
+})
+
+
+def _admitted_intel_host(url: str) -> str:
+    if not isinstance(url, str) or not url or len(url) > 2048:
+        raise ValueError("SOURCE_URL_NOT_ALLOWED")
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+        username = parts.username
+        password = parts.password
+    except ValueError as exc:
+        raise ValueError("SOURCE_URL_NOT_ALLOWED") from exc
+    if (parts.scheme != "https" or host not in TRUSTED_INTEL_HOSTS or
+            port is not None or username is not None or password is not None or
+            parts.fragment or not parts.netloc):
+        raise ValueError("SOURCE_URL_NOT_ALLOWED")
+    return host
+
+
+class _PinnedOriginRedirect(urllib.request.HTTPRedirectHandler):
+    """Allow relative/same-origin HTTPS redirects; block off-origin hops.
+
+    The GitHub/OTX authentication headers must never accompany a redirect
+    to another host. A rejected redirect remains a failed source fetch.
+    """
+    def __init__(self, original_host: str):
+        super().__init__()
+        self.original_host = original_host
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            if _admitted_intel_host(newurl) != self.original_host:
+                raise ValueError("SOURCE_REDIRECT_NOT_ALLOWED")
+        except ValueError:
+            raise urllib.error.HTTPError(req.full_url, code, "SOURCE_REDIRECT_NOT_ALLOWED", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_trusted_intel(req, timeout):
+    host = _admitted_intel_host(req.full_url)  # before any network access
+    opener = urllib.request.build_opener(_PinnedOriginRedirect(host))
+    return opener.open(req, timeout=timeout)
+
+
 def _get(url: str, headers: dict = None, timeout: int = 15):
     try:
         req = urllib.request.Request(url, headers=headers or {
             "Accept": "application/json",
             "User-Agent": "CDB-SENTINEL-APEX/1.0 (multi-source-collector)"
         })
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _open_trusted_intel(req, timeout=timeout) as r:
             ct = r.headers.get("Content-Type", "")
-            raw = r.read()
+            # Bound the response BEFORE decoding/JSON/XML parsing. A broken
+            # upstream must not exhaust the scheduled runner's memory.
+            raw = r.read(MAX_SOURCE_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_SOURCE_RESPONSE_BYTES:
+                log.warning("Upstream response exceeded bounded ingestion budget")
+                return None
             if "xml" in ct or "rss" in ct:
                 return raw.decode("utf-8", errors="replace")
             return json.loads(raw.decode("utf-8", errors="replace"))
     except Exception as e:
-        log.warning("GET %s failed: %s", url[:80], e)
+        # Logs contain no raw URL/query, HTTP body, secret, or exception text.
+        log.warning("Source request rejected or failed (reason=%s)", type(e).__name__)
         return None
 
 
@@ -297,7 +381,7 @@ def collect_cisa_alerts() -> list:
         return []
     items = []
     try:
-        root = ET.fromstring(raw)
+        root = _parse_rss_xml(raw)
         ns = {"atom": "http://www.w3.org/2005/Atom"}
         # Try Atom feed
         entries = root.findall(".//atom:entry", ns) or root.findall(".//item")
@@ -396,10 +480,16 @@ def collect_malwarebazaar() -> list:
             headers={"Content-Type": "application/x-www-form-urlencoded",
                      "User-Agent": "CDB-SENTINEL-APEX/1.0"}
         )
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.loads(r.read().decode("utf-8"))
+        with _open_trusted_intel(req, timeout=15) as r:
+            # This POST is outside _get(); enforce the same cap before JSON
+            # decoding and never follow an off-origin redirect.
+            body = r.read(MAX_SOURCE_RESPONSE_BYTES + 1)
+            if len(body) > MAX_SOURCE_RESPONSE_BYTES:
+                log.warning("[MalwareBazaar] Upstream response exceeded budget")
+                return []
+            data = json.loads(body.decode("utf-8"))
     except Exception as e:
-        log.warning("[MalwareBazaar] Failed: %s", e)
+        log.warning("[MalwareBazaar] Source fetch failed (reason=%s)", type(e).__name__)
         return []
 
     if data.get("query_status") != "ok" or not data.get("data"):
@@ -456,7 +546,7 @@ def collect_bleepingcomputer() -> list:
     retrieved_at = _now()
     items = []
     try:
-        root = ET.fromstring(raw)
+        root = _parse_rss_xml(raw)
         feed_labels = _rss_metadata_tlps(root, skip_items=True)
         entries = root.findall(".//item")
         for entry in entries[:MAX_PER_SOURCE]:
@@ -512,7 +602,7 @@ def collect_securityaffairs() -> list:
     retrieved_at = _now()
     items = []
     try:
-        root = ET.fromstring(raw)
+        root = _parse_rss_xml(raw)
         feed_labels = _rss_metadata_tlps(root, skip_items=True)
         entries = root.findall(".//item")
         for entry in entries[:MAX_PER_SOURCE]:
@@ -567,7 +657,7 @@ def collect_cybersecuritynews() -> list:
     retrieved_at = _now()
     items = []
     try:
-        root = ET.fromstring(raw)
+        root = _parse_rss_xml(raw)
         feed_labels = _rss_metadata_tlps(root, skip_items=True)
         entries = root.findall(".//item")
         for entry in entries[:MAX_PER_SOURCE]:

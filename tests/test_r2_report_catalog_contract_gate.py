@@ -101,3 +101,24 @@ def test_stage35_does_not_plan_partial_report_trio(catalog):
     keys = {key for _src, key in r2_upload.build_upload_plan()}
     report_keys = {key for _src, key in r2_upload.REPORTS_INDEX_FILES}
     assert keys.isdisjoint(report_keys)
+
+
+def test_chronology_failure_logs_bounded_gate_reason_and_remains_blocked(catalog, caplog):
+    _, trio, write = catalog
+    trio["index.json"]["reports"][0]["timestamp"] = "not-utc"
+    write()
+    with caplog.at_level("ERROR"):
+        assert r2_upload.report_catalog_chronology_precheck() is False
+    assert "P0 report catalog chronology rejected" in caplog.text
+    assert "timestamp not a validated explicit-UTC" in caplog.text
+
+
+def test_registry_failure_logs_bounded_gate_reason_and_remains_blocked(catalog, caplog):
+    _, trio, write = catalog
+    trio["stats.json"]["by_severity"]["HIGH"] = 0
+    trio["stats.json"]["by_severity"]["MEDIUM"] = 1
+    write()
+    with caplog.at_level("ERROR"):
+        assert r2_upload.report_catalog_chronology_precheck() is False
+    assert "P0 report registry rejected" in caplog.text
+    assert "stats:" in caplog.text
