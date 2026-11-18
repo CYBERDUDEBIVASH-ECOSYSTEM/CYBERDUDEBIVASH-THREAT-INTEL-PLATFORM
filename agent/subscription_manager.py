@@ -141,3 +141,37 @@ class CDBSubscriptionManager:
 
 # Global instance
 SUBSCRIPTION_CORE = CDBSubscriptionManager()
+
+def _main(argv=None):
+    """Reject unsupported webhook dispatches until receipt verification exists.
+
+    This module exposes tenant-management functions; it does not implement
+    authenticated Gumroad/Stripe dispatch processing, idempotency, or a
+    verified payment-to-tenant durable-write transaction. The old workflow
+    passed --webhook-event to this module, which silently ignored the flag,
+    exited 0, and reported successful provisioning without issuing a key.
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Tenant-management library; direct payment dispatch disabled"
+    )
+    parser.add_argument("--webhook-event", action="store_true")
+    args = parser.parse_args(argv)
+    if args.webhook_event:
+        print(
+            "P0_FULFILLMENT_HOLD: Unverified webhook-dispatch provisioning "
+            "is not implemented; no customer credential issued.",
+            file=sys.stderr,
+        )
+        return 78
+    print(
+        "P0_FULFILLMENT_HOLD: No supported provisioning CLI entry point.",
+        file=sys.stderr,
+    )
+    return 64
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
