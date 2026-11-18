@@ -253,6 +253,24 @@ export async function fetchPublic(path, fetchFn = globalThis.fetch) {
   return readBounded(response);
 }
 
+// Public CI diagnostics are fixed reason codes only. Never reflect untrusted
+// response bodies, URLs, headers, exception strings, or credentials into logs.
+function safeProbeReason(error) {
+  const code = error instanceof Error ? error.message : '';
+  if (/^HTTP_(?:400|401|403|404|408|409|429|500|502|503|504)$/.test(code))
+    return code;
+  const permitted = new Set([
+    'UNEXPECTED_CONTENT_TYPE', 'INVALID_OR_OVERSIZE_RESPONSE',
+    'RESPONSE_TOO_LARGE', 'REPORT_CONTENT_ID_NOT_VERIFIED',
+    'REPORT_EPSS_METADATA_DIVERGENCE', 'REPORT_SEVERITY_METADATA_DIVERGENCE',
+    'REPORT_ACTOR_METADATA_DIVERGENCE',
+  ]);
+  if (permitted.has(code)) return code;
+  if (error?.name === 'AbortError' || error?.name === 'TimeoutError')
+    return 'FETCH_TIMEOUT';
+  return 'UNCLASSIFIED_FETCH_FAILURE';
+}
+
 export async function runPublicReportFetchback({ fetchFn = globalThis.fetch } = {}) {
   let catalog;
   try {
@@ -279,8 +297,8 @@ export async function runPublicReportFetchback({ fetchFn = globalThis.fetch } = 
       if (!reportActorMatchesCatalog(html, actor_tag))
         throw new Error('REPORT_ACTOR_METADATA_DIVERGENCE');
       probes.push({ path, status:'PASS' });
-    } catch {
-      probes.push({ path, status:'FAIL' });
+    } catch (error) {
+      probes.push({ path, status:'FAIL', reason: safeProbeReason(error) });
     }
   }
   const allPass = probes.length > 0 && probes.every(p => p.status === 'PASS');
