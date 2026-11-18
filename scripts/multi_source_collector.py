@@ -88,6 +88,29 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# P0 HIGH/HIGH B314: public RSS sources are untrusted XML. Reject DTD/ENTITY
+# declarations and oversized payloads before expat receives any bytes.
+# Using XMLParser rather than direct ET.fromstring avoids unsafe raw parsing;
+# the byte cap bounds XML tree growth without adding a new dependency.
+MAX_SOURCE_RESPONSE_BYTES = 8 * 1024 * 1024
+RSS_XML_MAX_BYTES = 2 * 1024 * 1024
+_XML_DECLARATION_FORBIDDEN = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.I)
+
+
+def _parse_rss_xml(raw: str):
+    if not isinstance(raw, str):
+        raise ValueError("XML_SOURCE_NOT_TEXT")
+    if len(raw.encode("utf-8")) > RSS_XML_MAX_BYTES:
+        raise ValueError("XML_SOURCE_SIZE_LIMIT")
+    if _XML_DECLARATION_FORBIDDEN.search(raw):
+        raise ValueError("XML_DTD_ENTITY_FORBIDDEN")
+    parser = ET.XMLParser(target=ET.TreeBuilder())
+    parser.feed(raw)
+    return parser.close()
+
+
+
+
 def _gen_id(title: str, ts: str) -> str:
     # v166.6: 24-char hex ID matches main pipeline format; prevents Stage 3.91 contract failure
     h = hashlib.md5(f"{title}{ts}".encode()).hexdigest()[:24]
@@ -140,7 +163,12 @@ def _get(url: str, headers: dict = None, timeout: int = 15):
         })
         with urllib.request.urlopen(req, timeout=timeout) as r:
             ct = r.headers.get("Content-Type", "")
-            raw = r.read()
+            # Bound the response BEFORE decoding/JSON/XML parsing. A broken
+            # upstream must not exhaust the scheduled runner's memory.
+            raw = r.read(MAX_SOURCE_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_SOURCE_RESPONSE_BYTES:
+                log.warning("Upstream response exceeded bounded ingestion budget")
+                return None
             if "xml" in ct or "rss" in ct:
                 return raw.decode("utf-8", errors="replace")
             return json.loads(raw.decode("utf-8", errors="replace"))
@@ -297,7 +325,7 @@ def collect_cisa_alerts() -> list:
         return []
     items = []
     try:
-        root = ET.fromstring(raw)
+        root = _parse_rss_xml(raw)
         ns = {"atom": "http://www.w3.org/2005/Atom"}
         # Try Atom feed
         entries = root.findall(".//atom:entry", ns) or root.findall(".//item")
@@ -456,7 +484,7 @@ def collect_bleepingcomputer() -> list:
     retrieved_at = _now()
     items = []
     try:
-        root = ET.fromstring(raw)
+        root = _parse_rss_xml(raw)
         feed_labels = _rss_metadata_tlps(root, skip_items=True)
         entries = root.findall(".//item")
         for entry in entries[:MAX_PER_SOURCE]:
@@ -512,7 +540,7 @@ def collect_securityaffairs() -> list:
     retrieved_at = _now()
     items = []
     try:
-        root = ET.fromstring(raw)
+        root = _parse_rss_xml(raw)
         feed_labels = _rss_metadata_tlps(root, skip_items=True)
         entries = root.findall(".//item")
         for entry in entries[:MAX_PER_SOURCE]:
@@ -567,7 +595,7 @@ def collect_cybersecuritynews() -> list:
     retrieved_at = _now()
     items = []
     try:
-        root = ET.fromstring(raw)
+        root = _parse_rss_xml(raw)
         feed_labels = _rss_metadata_tlps(root, skip_items=True)
         entries = root.findall(".//item")
         for entry in entries[:MAX_PER_SOURCE]:
