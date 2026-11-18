@@ -158,11 +158,11 @@ def _observe_rss_item(item, entry, feed_url, retrieved_at, feed_labels):
 
 # Explicit upstream admission prevents an intelligence feed or redirect from
 # reaching runner metadata, loopback, or a credential-bearing off-origin host.
-# These are the only production _get() call sites in this collector.
+# The eight sites cover the seven _get() feeds and the MalwareBazaar POST.
 TRUSTED_INTEL_HOSTS = frozenset({
     "api.github.com", "www.cisa.gov", "urlhaus-api.abuse.ch",
     "www.bleepingcomputer.com", "securityaffairs.com",
-    "cybersecuritynews.com", "otx.alienvault.com",
+    "cybersecuritynews.com", "otx.alienvault.com", "mb-api.abuse.ch",
 })
 
 
@@ -479,10 +479,16 @@ def collect_malwarebazaar() -> list:
             headers={"Content-Type": "application/x-www-form-urlencoded",
                      "User-Agent": "CDB-SENTINEL-APEX/1.0"}
         )
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.loads(r.read().decode("utf-8"))
+        with _open_trusted_intel(req, timeout=15) as r:
+            # This POST is outside _get(); enforce the same cap before JSON
+            # decoding and never follow an off-origin redirect.
+            body = r.read(MAX_SOURCE_RESPONSE_BYTES + 1)
+            if len(body) > MAX_SOURCE_RESPONSE_BYTES:
+                log.warning("[MalwareBazaar] Upstream response exceeded budget")
+                return []
+            data = json.loads(body.decode("utf-8"))
     except Exception as e:
-        log.warning("[MalwareBazaar] Failed: %s", e)
+        log.warning("[MalwareBazaar] Source fetch failed (reason=%s)", type(e).__name__)
         return []
 
     if data.get("query_status") != "ok" or not data.get("data"):
