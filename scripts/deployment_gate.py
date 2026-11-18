@@ -16,7 +16,7 @@ CI Integration (.github/workflows):
       run: python scripts/deployment_gate.py --strict
 
 Exit codes:
-    0 — All gates passed — deployment approved
+    0 — Access-governance policy checks passed; production release NOT authorized
     1 — One or more gates failed — deployment BLOCKED
 
 Gates:
@@ -444,7 +444,7 @@ def main():
     print("=" * 70)
 
     if GATE_FAIL_COUNT == 0:
-        print("\n  ✅ DEPLOYMENT APPROVED — All governance checks passed")
+        print("\n  ✅ ACCESS GOVERNANCE PASSED — Production release NOT authorized by this gate")
         print("     MODEL_C is the only active architecture")
         print("     MODEL_A: DISABLED ✓")
         print("     MODEL_B: DISABLED ✓")
