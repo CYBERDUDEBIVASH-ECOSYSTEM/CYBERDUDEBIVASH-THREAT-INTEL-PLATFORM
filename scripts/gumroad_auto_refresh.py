@@ -151,8 +151,8 @@ def gm_request(token: str, method: str, path: str,
 def list_products(token: str) -> list[dict]:
     """Return all Gumroad products for this account."""
     resp = gm_request(token, "GET", "/products")
-    if not resp.get("success"):
-        log.warning("list_products failed: %s", resp.get("message", resp.get("error")))
+    if resp.get("success") is not True:
+        log.warning("Gumroad catalogue read was not verified")
         return []
     return resp.get("products", [])
 
@@ -166,19 +166,18 @@ def update_product_description(token: str, product_id: str,
     resp = gm_request(token, "PUT", f"/products/{product_id}", {
         "description": description,
     })
-    ok = bool(resp.get("success"))
+    ok = resp.get("success") is True
     if ok:
-        log.info("Updated product %s OK", product_id)
+        log.info("Gumroad provider acknowledged a single product update")
     else:
-        log.warning("Update product %s FAILED: %s", product_id,
-                    resp.get("message", resp.get("error")))
+        log.warning("Gumroad provider did not verify the requested update")
     return ok
 
 
 def fetch_recent_sales(token: str) -> dict[str, int]:
     """Returns {product_id: sale_count} for recent sales (metrics only)."""
     resp = gm_request(token, "GET", "/sales")
-    if not resp.get("success"):
+    if resp.get("success") is not True:
         return {}
     sales = resp.get("sales", [])
     counts: dict[str, int] = {}
@@ -383,7 +382,11 @@ def build_generic_description(feed: list[dict], product: dict) -> str:
 def main() -> int:
     token = os.environ.get("GUMROAD_ACCESS_TOKEN", "").strip()
     feed_path = os.environ.get("FEED_PATH", "feed.json")
-    dry_run = os.environ.get("GUMROAD_DRY_RUN", "true").lower() in ("true", "1", "yes")
+    mode = os.environ.get("GUMROAD_DRY_RUN", "true").strip().lower()
+    if mode not in ("true", "false"):
+        log.error("P0 HOLD: Invalid dry-run value, explicit true or false required")
+        return 2
+    dry_run = mode == "true"
 
     # A manual run without an explicit live choice must not contact Gumroad.
     # This check precedes ANY product/sales API call, even read-only requests.
