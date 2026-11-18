@@ -92,6 +92,7 @@ def _now() -> str:
 # declarations and oversized payloads before expat receives any bytes.
 # Using XMLParser rather than direct ET.fromstring avoids unsafe raw parsing;
 # the byte cap bounds XML tree growth without adding a new dependency.
+MAX_SOURCE_RESPONSE_BYTES = 8 * 1024 * 1024
 RSS_XML_MAX_BYTES = 2 * 1024 * 1024
 _XML_DECLARATION_FORBIDDEN = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.I)
 
@@ -162,7 +163,12 @@ def _get(url: str, headers: dict = None, timeout: int = 15):
         })
         with urllib.request.urlopen(req, timeout=timeout) as r:
             ct = r.headers.get("Content-Type", "")
-            raw = r.read()
+            # Bound the response BEFORE decoding/JSON/XML parsing. A broken
+            # upstream must not exhaust the scheduled runner's memory.
+            raw = r.read(MAX_SOURCE_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_SOURCE_RESPONSE_BYTES:
+                log.warning("Upstream response exceeded bounded ingestion budget")
+                return None
             if "xml" in ct or "rss" in ct:
                 return raw.decode("utf-8", errors="replace")
             return json.loads(raw.decode("utf-8", errors="replace"))
