@@ -82,9 +82,9 @@ def _run(net, rejected=frozenset(REJECTED)):
     dcv._GATE_VERDICTS.clear()
     with patch.object(dcv, "_http_probe", side_effect=net.probe), \
          patch.object(dcv, "_is_expected_publication_rejection", side_effect=lambda u: u in rejected):
-        return (dcv.phase2_cdn_readiness_probe([], MANIFEST),
-                dcv.phase3_incremental_retry([], MANIFEST),
-                dcv.phase4_convergence_confirmation([], MANIFEST))
+        p2 = dcv.phase2_cdn_readiness_probe([], MANIFEST)
+        p3 = dcv.phase3_incremental_retry([], MANIFEST)
+        return (p2, p3, dcv.phase4_convergence_confirmation([], MANIFEST, p3.probes))
 
 
 def _sort_first(urls):
@@ -114,7 +114,7 @@ def test_all_publication_gated_latest_reports_never_certify_report_delivery(cloc
          patch.object(dcv, "_is_expected_publication_rejection", return_value=True):
         p3 = dcv.phase3_incremental_retry([], MANIFEST)
         before_p4 = len(net.calls)
-        p4 = dcv.phase4_convergence_confirmation([], MANIFEST)
+        p4 = dcv.phase4_convergence_confirmation([], MANIFEST, p3.probes)
     assert not p3.success
     assert not p4.success
     assert "positive_report_200=False" in p3.message
@@ -141,7 +141,7 @@ def test_no_latest_report_sample_cannot_certify_phase3_or_phase4(monkeypatch):
         dcv, "_http_probe", lambda *args, **kwargs: pytest.fail("unexpected live HTTP probe")
     )
     p3 = dcv.phase3_incremental_retry([], {"files": {}})
-    p4 = dcv.phase4_convergence_confirmation([], {"files": {}})
+    p4 = dcv.phase4_convergence_confirmation([], {"files": {}}, p3.probes)
     assert not p3.success and not p4.success
     assert p3.probes == [] and p4.probes == []
     assert "NO_CANONICAL_LATEST_REPORT_EVIDENCE" in p3.message
@@ -169,8 +169,8 @@ def test_gate_verdict_is_asked_once_per_url(clock):
          patch.object(dcv, "_is_expected_publication_rejection",
                       side_effect=lambda u: asked.append(u) or u in REJECTED):
         dcv.phase2_cdn_readiness_probe([], MANIFEST)
-        dcv.phase3_incremental_retry([], MANIFEST)
-        dcv.phase4_convergence_confirmation([], MANIFEST)
+        p3 = dcv.phase3_incremental_retry([], MANIFEST)
+        dcv.phase4_convergence_confirmation([], MANIFEST, p3.probes)
     assert sorted(asked) == sorted(set(asked))
 
 
@@ -251,7 +251,8 @@ def test_healthy_deployment_has_no_fixed_waits(clock):
     with patch.object(dcv, "_http_probe", side_effect=net.probe), \
          patch.object(dcv, "_is_expected_publication_rejection", side_effect=lambda u: u in REJECTED):
         p1 = dcv.phase1_pages_push_detection()
-        p4 = dcv.phase4_convergence_confirmation([], MANIFEST)
+        p3 = dcv.phase3_incremental_retry([], MANIFEST)
+        p4 = dcv.phase4_convergence_confirmation([], MANIFEST, p3.probes)
     assert p1.success and p4.success
     # only the 1s spacing between probes remains
     assert all(s <= dcv.PROBE_INTERVAL for s in clock), clock
@@ -271,7 +272,8 @@ def test_confirmation_pauses_only_after_a_failed_pass(clock):
          patch.object(dcv, "_is_expected_publication_rejection", return_value=False), \
          patch.dict(dcv.os.environ, {"CONVERGENCE_CONFIRM_RETRY_WAIT": "30"}):
         dcv._GATE_VERDICTS.clear()
-        p4 = dcv.phase4_convergence_confirmation([], MANIFEST)
+        p3 = dcv.phase3_incremental_retry([], MANIFEST)
+        p4 = dcv.phase4_convergence_confirmation([], MANIFEST, p3.probes)
     assert p4.success
     assert [s for s in clock if s > dcv.PROBE_INTERVAL] == [30]
 
@@ -406,3 +408,86 @@ def test_complete_historical_sample_still_passes(monkeypatch):
     assert result.success
     assert net.calls == history
     assert len(result.probes) == dcv.HIST_PROBE_COUNT
+
+
+def test_phase4_confirmed_cohort_uses_real_200_after_newest_five_are_withheld(clock, monkeypatch):
+    """Customer-delivery signal must survive five newer valid policy denials."""
+    withheld = [f"{BASE}/reports/2026/11/intel--{i:024x}.html" for i in range(5)]
+    delivered = [f"{BASE}/reports/2026/11/intel--{i:024x}.html" for i in range(5, 8)]
+    latest = withheld + delivered
+    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *a: (latest, []))
+    net = FakeNet({url: 404 for url in withheld})
+    dcv._GATE_VERDICTS.clear()
+    with patch.object(dcv, "_http_probe", side_effect=net.probe), \
+         patch.object(dcv, "_is_expected_publication_rejection",
+                      side_effect=lambda url: url in withheld):
+        p3 = dcv.phase3_incremental_retry([], MANIFEST)
+        before = len(net.calls)
+        p4 = dcv.phase4_convergence_confirmation([], MANIFEST, p3.probes)
+    assert p3.success and p4.success
+    assert len([r for r in p3.probes if r.status_code == 200]) == 3
+    assert all(u not in net.calls[before:] for u in withheld)
+    assert [r.url for r in p4.probes if "/reports/" in r.url] == delivered * dcv.CONFIRM_RUNS
+    assert all(r.status_code == 200 for r in p4.probes if "/reports/" in r.url)
+
+
+def test_phase4_refuses_only_gate_rejected_or_auth_accepted_phase3_probes(monkeypatch):
+    """404/401/unchecked reports cannot be laundered into 200 delivery."""
+    latest = [f"{BASE}/reports/2026/11/intel--{i:024x}.html" for i in range(3)]
+    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *a: (latest, []))
+    monkeypatch.setattr(dcv, "_probe_batch", lambda *a: pytest.fail("no network expected"))
+    probes = [
+        dcv.ProbeResult(latest[0], 404, 1.0, True, gate_rejected=True),
+        dcv.ProbeResult(latest[1], 401, 1.0, True),
+        dcv.ProbeResult(latest[2], 0, 0.0, False, error="NOT_PROBED: exhausted"),
+    ]
+    result = dcv.phase4_convergence_confirmation([], MANIFEST, probes)
+    assert not result.success and result.probes == []
+    assert "P0_NO_PHASE3_POSITIVE_REPORT_EVIDENCE" in result.message
+
+
+def test_phase4_reconfirming_previously_200_report_that_now_404s_fails_closed(clock, monkeypatch):
+    report = f"{BASE}/reports/2026/11/intel--{'a' * 24}.html"
+    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *a: ([report], []))
+    monkeypatch.setattr(dcv, "CONFIRM_RUNS", 1)
+    monkeypatch.setenv("CONVERGENCE_CONFIRM_RETRY_WAIT", "0")
+    verified = [dcv.ProbeResult(report, 200, 1.0, True)]
+    net = FakeNet({report: 404})
+    with patch.object(dcv, "_http_probe", side_effect=net.probe), \
+         patch.object(dcv, "_is_expected_publication_rejection", return_value=True):
+        dcv._GATE_VERDICTS.clear()
+        result = dcv.phase4_convergence_confirmation([], MANIFEST, verified)
+    assert not result.success
+    assert any(r.status_code == 404 and r.gate_rejected for r in result.probes)
+
+def test_phase4_mixed_http200_and_gate_denial_never_certifies(clock, monkeypatch):
+    """A single 200 cannot conceal another selected report's new 404."""
+    reports = [f"{BASE}/reports/2026/11/intel--{i:024x}.html" for i in range(3)]
+    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *a: (reports, []))
+    monkeypatch.setattr(dcv, "CONFIRM_RUNS", 1)
+    verified = [dcv.ProbeResult(url, 200, 1.0, True) for url in reports]
+    net = FakeNet({reports[0]: 404})
+    dcv._GATE_VERDICTS.clear()
+    with patch.object(dcv, "_http_probe", side_effect=net.probe), \
+         patch.object(dcv, "_is_expected_publication_rejection",
+                      side_effect=lambda url: url == reports[0]):
+        p4 = dcv.phase4_convergence_confirmation([], MANIFEST, verified)
+    assert not p4.success
+    assert len([r for r in p4.probes if r.status_code == 200 and r.url in reports]) == 2
+    assert any(r.gate_rejected for r in p4.probes)
+    assert "0/1 consecutive clean passes" in p4.message
+    assert net.calls.count(reports[0]) == 1  # Don't hammer authoritative 404s.
+
+
+def test_phase4_mixed_http200_and_auth_only_401_never_certifies(clock, monkeypatch):
+    """Report 401 proves Worker reachability, never a delivered HTML report."""
+    reports = [f"{BASE}/reports/2026/11/intel--{i:024x}.html" for i in range(3)]
+    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *a: (reports, []))
+    monkeypatch.setattr(dcv, "CONFIRM_RUNS", 1)
+    verified = [dcv.ProbeResult(url, 200, 1.0, True) for url in reports]
+    net = FakeNet({reports[1]: 401})
+    with patch.object(dcv, "_http_probe", side_effect=net.probe):
+        p4 = dcv.phase4_convergence_confirmation([], MANIFEST, verified)
+    assert not p4.success
+    assert any(r.status_code == 401 for r in p4.probes)
+    assert net.calls.count(reports[1]) == 1
