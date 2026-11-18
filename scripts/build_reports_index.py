@@ -478,8 +478,20 @@ def main() -> int:
         # legacy UNKNOWN/artifact fallback; never invent a rating.
         severity_basis = None
         if feed_item:
+            # This feed entry can have only id/timestamp while the HTML still
+            # carries its published title and APEX composite display label.
+            # Reconstruct *display context*, not CVSS/KEV provenance, before
+            # applying the same severity authority as dossier section S1.
+            # A CVE/vulnerability without real CVSS evidence stays UNRATED;
+            # a non-vulnerability may retain its clearly identified APEX
+            # heuristic. Never turn HTML "Risk n/10" into CVSS evidence.
+            _basis_item = dict(feed_item)
+            if not _basis_item.get("title") and title:
+                _basis_item["title"] = title
+            if not _basis_item.get("severity") and severity != "UNKNOWN":
+                _basis_item["severity"] = severity
             _basis = _di.severity_basis(
-                feed_item, feed_item.get("cvss_score"), _kev_confirmed(feed_item)
+                _basis_item, feed_item.get("cvss_score"), _kev_confirmed(feed_item)
             )
             severity = _basis["display"]
             severity_basis = _basis["severity_source"]
