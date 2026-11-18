@@ -163,7 +163,7 @@ class TestUntrustedRssXmlParser(unittest.TestCase):
             msc._parse_rss_xml(payload)
 
     def test_malformed_feed_is_not_silently_accepted(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(msc.ET.ParseError):
             msc._parse_rss_xml("<rss><item></rss>")
 
 
