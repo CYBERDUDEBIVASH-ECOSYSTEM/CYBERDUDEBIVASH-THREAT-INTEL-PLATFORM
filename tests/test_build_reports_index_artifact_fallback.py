@@ -323,7 +323,7 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
     def test_sparse_feed_explicit_unknown_recovers_non_cve_apex_label(self):
         report_id = "intel--abc6666666666666"
         self._write_report(report_id,
-                           _report_html("Non-Vulnerability Supply Chain Notice", "MEDIUM", 4.8))
+                           _report_html("Supply Chain Operational Notice", "MEDIUM", 4.8))
         self._write_feed([{
             "id": report_id, "timestamp": _recent_ts(),
             "severity": "UNKNOWN",
