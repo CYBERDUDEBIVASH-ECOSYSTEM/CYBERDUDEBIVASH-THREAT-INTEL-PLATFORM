@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import textwrap
 import urllib.error
@@ -80,33 +81,71 @@ DETECTION_PACK_NAME_PREFIX = "sentinel apex detection pack"
 
 
 # ── Gumroad API Layer ─────────────────────────────────────────────────────────
+# A manually approved catalogue update must never take the bearer token to a
+# foreign origin, a non-HTTPS URL, or an unapproved API operation.
+GUMROAD_MAX_API_BYTES = 2 * 1024 * 1024
+GUMROAD_PRODUCT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+
+
+class _RejectGumroadRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # No following 301/302/307/308 with bearer credentials, even to
+        # the same host. Investigate provider changes rather than downgrade.
+        raise urllib.error.HTTPError(req.full_url, code, "GUMROAD_REDIRECT_DENIED", headers, fp)
+
+
+def _open_gumroad(req, timeout: float = 20):
+    if not req.full_url.startswith(GUMROAD_BASE + "/"):
+        raise ValueError("GUMROAD_ORIGIN_NOT_ALLOWED")
+    opener = urllib.request.build_opener(_RejectGumroadRedirect())
+    return opener.open(req, timeout=timeout)
+
+
+def _gumroad_allowed_request(method: str, path: str, data: dict | None) -> bool:
+    if method == "GET":
+        return path in ("/products", "/sales") and data is None
+    if method == "PUT" and isinstance(path, str) and path.startswith("/products/"):
+        product_id = path.removeprefix("/products/")
+        return (GUMROAD_PRODUCT_ID_RE.fullmatch(product_id) is not None
+                and isinstance(data, dict)
+                and set(data) == {"description"}
+                and isinstance(data["description"], str)
+                and 0 < len(data["description"]) <= MAX_DESC_CHARS)
+    return False
+
+
 def gm_request(token: str, method: str, path: str,
                data: dict | None = None) -> dict:
-    """Gumroad API v2 request. Returns parsed JSON dict."""
-    url = f"{GUMROAD_BASE}{path}"
-    body: bytes | None = None
-    if data is not None:
-        # Gumroad uses form-encoded PUT bodies
-        body = urllib.parse.urlencode(data).encode()
+    """Make a bounded, HTTPS-only Gumroad request with no redirect or secret logs."""
+    if not isinstance(token, str) or not token.strip() or not _gumroad_allowed_request(method, path, data):
+        log.error("Gumroad request denied: missing authorization or invalid API operation")
+        return {"success": False, "error": "GUMROAD_REQUEST_NOT_ALLOWED"}
+    url = GUMROAD_BASE + path
+    body = urllib.parse.urlencode(data).encode("utf-8") if data is not None else None
     req = urllib.request.Request(
-        url,
-        data=body,
-        method=method,
+        url, data=body, method=method,
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/x-www-form-urlencoded",
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode(errors="replace")[:400]
-        log.error("Gumroad %s %s HTTP %d: %s", method, path, e.code, err_body)
-        return {"success": False, "error": f"HTTP {e.code}: {err_body}"}
-    except Exception as e:
-        log.error("Gumroad %s %s error: %s", method, path, e)
-        return {"success": False, "error": str(e)}
+        with _open_gumroad(req, timeout=20) as resp:
+            raw = resp.read(GUMROAD_MAX_API_BYTES + 1)
+            if len(raw) > GUMROAD_MAX_API_BYTES:
+                log.error("Gumroad response exceeded size limit")
+                return {"success": False, "error": "GUMROAD_RESPONSE_TOO_LARGE"}
+            result = json.loads(raw.decode("utf-8"))
+            if not isinstance(result, dict):
+                return {"success": False, "error": "GUMROAD_RESPONSE_INVALID"}
+            return result
+    except urllib.error.HTTPError as exc:
+        # Never log untrusted provider error bodies or URLs containing secrets.
+        log.error("Gumroad HTTP request failed (status=%s)", exc.code)
+        return {"success": False, "error": "GUMROAD_HTTP_ERROR"}
+    except Exception as exc:
+        log.error("Gumroad request failed (reason=%s)", type(exc).__name__)
+        return {"success": False, "error": "GUMROAD_REQUEST_FAILED"}
 
 
 def list_products(token: str) -> list[dict]:
