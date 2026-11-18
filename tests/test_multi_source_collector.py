@@ -168,3 +168,31 @@ class TestUntrustedRssXmlParser(unittest.TestCase):
     def test_malformed_feed_is_not_silently_accepted(self):
         with self.assertRaises(Exception):
             msc._parse_rss_xml("<rss><item></rss>")
+
+
+class TestUntrustedSourceResponseCap(unittest.TestCase):
+    def test_http_reader_has_hard_maximum_and_rejects_oversize(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+                self.read_bound = None
+                self.headers = {"Content-Type": "application/json"}
+            def __enter__(self): return self
+            def __exit__(self, *unused): return False
+            def read(self, limit=-1):
+                self.read_bound = limit
+                return self.payload[:limit]
+        fake = FakeResponse(b"a" * (msc.MAX_SOURCE_RESPONSE_BYTES + 1))
+        with patch.object(msc.urllib.request, "urlopen", return_value=fake):
+            result = msc._get("https://github.com/example")
+        self.assertIsNone(result)
+        self.assertEqual(fake.read_bound, msc.MAX_SOURCE_RESPONSE_BYTES + 1)
+
+    def test_http_reader_retains_valid_small_json(self):
+        class FakeResponse:
+            headers = {"Content-Type": "application/json"}
+            def __enter__(self): return self
+            def __exit__(self, *unused): return False
+            def read(self, limit=-1): return b'{"ok":true}'[:limit]
+        with patch.object(msc.urllib.request, "urlopen", return_value=FakeResponse()):
+            self.assertEqual(msc._get("https://github.com/example"), {"ok": True})
