@@ -477,8 +477,19 @@ def main() -> int:
         # legacy UNKNOWN/artifact fallback; never invent a rating.
         severity_basis = None
         if feed_item:
+            # The report's own public HTML can supply missing context from
+            # the same original intelligence item. Do NOT treat its tactical
+            # 0-10 risk_score or marketing severity label as a CVSS value.
+            # CVSS truth still comes ONLY from the feed's cvss_score field.
+            # In particular, a CVE title without CVSS must remain UNRATED;
+            # a non-vulnerability's own APEX severity may be preserved.
+            _basis_item = dict(feed_item)
+            if not _basis_item.get("title") and title:
+                _basis_item["title"] = title
+            if not _basis_item.get("severity") or str(_basis_item["severity"]).strip().upper() == "UNKNOWN":
+                _basis_item["severity"] = severity
             _basis = _di.severity_basis(
-                feed_item, feed_item.get("cvss_score"), _kev_confirmed(feed_item)
+                _basis_item, feed_item.get("cvss_score"), _kev_confirmed(feed_item)
             )
             severity = _basis["display"]
             severity_basis = _basis["severity_source"]
