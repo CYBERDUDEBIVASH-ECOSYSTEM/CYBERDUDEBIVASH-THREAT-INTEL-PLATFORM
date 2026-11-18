@@ -196,7 +196,7 @@ def test_all_gate_rejected_reports_do_not_certify_historical_delivery(
     phase1 = dcv.phase1_pages_push_detection()
     phase2 = dcv.phase2_cdn_readiness_probe([], manifest)
     phase3 = dcv.phase3_incremental_retry([], manifest)
-    phase4 = dcv.phase4_convergence_confirmation([], manifest)
+    phase4 = dcv.phase4_convergence_confirmation([], manifest, phase3.probes)
     phase5 = dcv.phase5_historical_report_audit([], manifest)
 
     # Every sampled latest/historical report is publication-gate REJECTED.

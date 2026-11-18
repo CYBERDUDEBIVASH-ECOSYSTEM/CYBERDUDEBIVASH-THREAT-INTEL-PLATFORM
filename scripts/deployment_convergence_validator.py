@@ -741,7 +741,9 @@ def phase3_incremental_retry(feed: List[dict], manifest: dict) -> PhaseResult:
     )
 
 
-def phase4_convergence_confirmation(feed: List[dict], manifest: dict) -> PhaseResult:
+def phase4_convergence_confirmation(
+    feed: List[dict], manifest: dict, phase3_probes: List[ProbeResult]
+) -> PhaseResult:
     """
     Phase 4: Convergence confirmation  -  requires CONFIRM_RUNS consecutive
     clean validation passes with a 30s gap between passes.
@@ -762,10 +764,30 @@ def phase4_convergence_confirmation(feed: List[dict], manifest: dict) -> PhaseRe
             probes=[], duration_s=0,
             message="NO_CANONICAL_LATEST_REPORT_EVIDENCE; no current report confirmation.",
         )
+    # Phase 3 has already probed the complete canonical current cohort.
+    # Its newest five may all be legitimately publication-gated (HTTP 404),
+    # even though later canonical entries were actually delivered (HTTP 200).
+    # Re-confirm only provenance-bound positive 200 URLs, in original UTC order.
+    # Never upgrade gate-rejected 404s, auth-only 401s or unprobed URLs to
+    # customer-delivery evidence. No extra discovery/network requests.
+    phase3_positive = {
+        r.url for r in phase3_probes
+        if r.success and r.status_code == 200 and not r.gate_rejected
+    }
+    confirmed_report_urls = [
+        url for url in latest_urls if url in phase3_positive
+    ][:5]
+    if not confirmed_report_urls:
+        log.error("Phase 4: P0_NO_PHASE3_POSITIVE_REPORT_EVIDENCE; no delivery-certified sample")
+        return PhaseResult(
+            phase=4, name="Convergence Confirmation", success=False,
+            probes=[], duration_s=round(time.monotonic() - t0, 1),
+            message="P0_NO_PHASE3_POSITIVE_REPORT_EVIDENCE; no HTTP 200 cohort to re-confirm.",
+        )
     core_urls = [
         PAGES_BASE_URL + "/",
         PAGES_BASE_URL + "/api/feed.json",
-    ] + latest_urls[:5]
+    ] + confirmed_report_urls
 
     consecutive_clean = 0
     all_results = []
@@ -783,7 +805,7 @@ def phase4_convergence_confirmation(feed: List[dict], manifest: dict) -> PhaseRe
         all_results.extend(results)
 
         success_rate = ok / len(core_urls) if core_urls else 0
-        reports = [r for r in results if r.url in latest_urls[:5]]
+        reports = [r for r in results if r.url in confirmed_report_urls]
         delivered = _has_delivered_report_200(reports)
         if latest_urls and reports and all(r.gate_rejected for r in reports):
             # No eventual-consistency retry can certify this run without a
@@ -1212,7 +1234,7 @@ def run_convergence_protocol() -> int:
 
     # ── Phase 4 (only if Phase 3 passed) ─────────────────────────────────
     if p3.success:
-        p4 = phase4_convergence_confirmation(feed, manifest)
+        p4 = phase4_convergence_confirmation(feed, manifest, p3.probes)
     else:
         log.warning("Phase 3 failed  -  skipping Phase 4 convergence confirmation.")
         p4 = PhaseResult(
