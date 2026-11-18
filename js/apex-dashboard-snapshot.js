@@ -96,6 +96,29 @@
     return String(it.severity || it.risk_level || '').toUpperCase();
   }
 
+  /** Mirror the Worker contract's explicit-offset ISO-8601 parsing boundary.
+   * Date.parse alone normalizes invalid dates and accepts local timestamps.
+   * The common skew ceiling remains 3 hours until the canonical Worker/Python
+   * public_freshness_contract is safely migrated and verified together.
+   */
+  function publicationTime(raw) {
+    if (typeof raw !== 'string') return NaN;
+    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/.exec(raw);
+    if (!m) return NaN;
+    var y = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+    var hour = Number(m[4]), minute = Number(m[5]), second = Number(m[6]);
+    if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return NaN;
+    if (day > new Date(Date.UTC(y, month, 0)).getUTCDate()) return NaN;
+    var milli = m[7] ? Number((m[7] + '00').slice(0, 3)) : 0;
+    var offset = 0;
+    if (m[8] !== 'Z') {
+      var oh = Number(m[10]), om = Number(m[11]);
+      if (oh > 23 || om > 59) return NaN;
+      offset = (m[9] === '-' ? -1 : 1) * (oh * 60 + om);
+    }
+    return Date.UTC(y, month - 1, day, hour, minute, second, milli) - offset * 60000;
+  }
+
   /** Publication freshness: /api/health first, then the feed's own contract fields. */
   function publicationFrom(health, feed) {
     var intel = health && health.intelligence;
@@ -145,18 +168,24 @@
     var items = feed ? itemsOf(feed).filter(function (i) { return i && typeof i === 'object'; }) : [];
 
     var pub = publicationFrom(health, feed);
-    var genMs = Date.parse(pub.generated_at || '');
+    var genMs = publicationTime(pub.generated_at);
     pub.age_seconds = isFinite(genMs) ? Math.max(0, Math.round((now - genMs) / 1000)) : null;
     // P0 R36: independent feed-generation corroboration. Neither a cached
     // health 'fresh' claim nor a feed-contract label can authorize old data.
-    var feedTime = Date.parse(feed && feed.generated_at || '');
+    var feedTime = publicationTime(feed && feed.generated_at);
     var maxAgeMs = 6 * 3600 * 1000;
+    var maxFutureSkewMs = 3 * 3600 * 1000; // canonical Worker/Python publication freshness contract
     var feedAgeMs = now - feedTime;
-    var feedTimeValid = isFinite(feedTime) && feedAgeMs <= maxAgeMs && feedAgeMs >= -3 * 3600 * 1000;
-    var healthTimeValid = isFinite(genMs) && now - genMs <= maxAgeMs && now - genMs >= -3 * 3600 * 1000;
-    pub.fresh = pub.status === 'fresh' && feedTimeValid && healthTimeValid &&
+    var feedTimeValid = isFinite(feedTime) && feedAgeMs <= maxAgeMs && feedAgeMs >= -maxFutureSkewMs;
+    var healthTimeValid = isFinite(genMs) && now - genMs <= maxAgeMs && now - genMs >= -maxFutureSkewMs;
+    // The published count is part of the authoritative feed contract. A
+    // malformed or inconsistent count must never show misleading live totals.
+    var countValid = !feed || !Object.prototype.hasOwnProperty.call(feed, 'count') ||
+      (Number.isSafeInteger(feed.count) && feed.count >= 0 && feed.count === items.length);
+    pub.fresh = pub.status === 'fresh' && feedTimeValid && healthTimeValid && countValid &&
       !(feed && typeof feed.freshness_status === 'string' && feed.freshness_status.toUpperCase() !== 'FRESH') &&
       !healthFail && !feedFail;
+    if (!countValid) pub.reason = 'FEED_COUNT_MISMATCH';
     // No expired intelligence may enter the ticker, metrics or preview.
     if (!pub.fresh) items = [];
 
@@ -166,8 +195,13 @@
       if (s === 'CRITICAL') critical++;
       if (s === 'HIGH') high++;
       iocs += iocContribution(it);
-      var r = parseFloat(it.risk_score);
-      if (isFinite(r)) { riskSum += r; riskN++; }
+      // Strict decimal semantics shared with the Worker metric-truth layer:
+      // parseFloat("9.8junk") and out-of-range scores are not measurements.
+      var rawRisk = it.risk_score;
+      var validRisk = typeof rawRisk === 'number' ||
+        (typeof rawRisk === 'string' && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(rawRisk.trim()));
+      var r = validRisk ? Number(rawRisk) : NaN;
+      if (Number.isFinite(r) && r >= 0 && r <= 10) { riskSum += r; riskN++; }
       var h = sourceHost(it);
       if (h) sources[h] = (sources[h] || 0) + 1;
     });
@@ -208,7 +242,7 @@
   }
 
   function utcText(iso) {
-    var t = Date.parse(iso || '');
+    var t = publicationTime(iso);
     if (!isFinite(t)) return null;
     return new Date(t).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
   }
