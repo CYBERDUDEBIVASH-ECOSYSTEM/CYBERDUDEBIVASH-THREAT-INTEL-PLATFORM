@@ -266,7 +266,7 @@ class TestTrustedIntelEgress(unittest.TestCase):
                           side_effect=ValueError("Bearer PRIVATE-UNTRUSTED-TEXT")):
             with self.assertLogs("COLLECTOR", level="WARNING") as captured:
                 self.assertIsNone(msc._get("https://api.github.com/advisories?secret=SENSITIVE"))
-        output = "\\n".join(captured.output)
+        output = " | ".join(captured.output)
         self.assertNotIn("SENSITIVE", output)
         self.assertNotIn("PRIVATE-UNTRUSTED-TEXT", output)
         self.assertNotIn("advisories?secret=", output)
