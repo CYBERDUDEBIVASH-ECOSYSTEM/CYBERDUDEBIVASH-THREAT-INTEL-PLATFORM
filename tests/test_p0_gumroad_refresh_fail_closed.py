@@ -70,6 +70,23 @@ class TestGumroadP0(unittest.TestCase):
                 self.assertEqual(gm.main(), 2)
                 listing.assert_not_called()
 
+    def test_ambiguous_dry_run_flags_never_become_live(self):
+        for value in ("", "yes", "0", "TRUE?"):
+            with patch.dict(os.environ, env(value), clear=True), \
+                 patch.object(gm, "load_feed") as feed, \
+                 patch.object(gm, "list_products") as listing:
+                self.assertEqual(gm.main(), 2)
+                feed.assert_not_called()
+                listing.assert_not_called()
+
+    def test_provider_success_is_boolean_not_truthy_string(self):
+        with patch.object(gm, "gm_request", return_value={"success": "false"}):
+            self.assertFalse(gm.update_product_description(
+                TOKEN, SKU, "offline test description", dry_run=False))
+        with patch.object(gm, "gm_request", return_value={"success": True}):
+            self.assertTrue(gm.update_product_description(
+                TOKEN, SKU, "offline test description", dry_run=False))
+
     def test_empty_feed_fails_before_any_provider_access(self):
         with patch.dict(os.environ, env("false"), clear=True), \
              patch.object(gm, "load_feed", return_value=[]), \
