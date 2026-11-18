@@ -43,8 +43,37 @@ async function http(method, path, { key, bearer, body } = {}) {
   if (key) headers["X-API-Key"] = key;
   if (bearer) headers.Authorization = "Bearer " + bearer;
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  const res = await fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(20000) });
-  const text = await res.text();
+  // Diagnostic boundary: never print request URL, tenant ID, token, query,
+  // upstream error string or body. The last production PRO canary failed with
+  // only "fetch failed", hiding which first-party capability was unavailable.
+  const family = path === "/api/feed.json" ? "FEED"
+    : path.startsWith("/api/watchdog/session") ? "SESSION"
+    : path.startsWith("/api/watchdog/watches") ? "WATCHES"
+    : path.startsWith("/api/watchdog/events") ? "EVENTS"
+    : path.startsWith("/api/watchdog/destinations") ? "DESTINATIONS"
+    : path.startsWith("/api/mssp/tenants") ? "MSSP_TENANTS" : "OTHER";
+  const requestStep = "HTTP_" + method + "_" + family;
+  let res;
+  try {
+    res = await fetch(base + path, {
+      method, headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (err) {
+    const failure = new Error(err?.name === "TimeoutError"
+      ? "TRANSPORT_TIMEOUT" : "TRANSPORT_UNAVAILABLE");
+    failure.step = requestStep;
+    throw failure;
+  }
+  let text;
+  try {
+    text = await res.text();
+  } catch {
+    const failure = new Error("RESPONSE_BODY_UNREADABLE");
+    failure.step = requestStep;
+    throw failure;
+  }
   let json = null;
   try { json = JSON.parse(text); } catch { json = null; }
   return { status: res.status, body: json };
