@@ -460,3 +460,34 @@ def test_phase4_reconfirming_previously_200_report_that_now_404s_fails_closed(cl
     assert not result.success
     assert any(r.status_code == 404 and r.gate_rejected for r in result.probes)
 
+def test_phase4_mixed_http200_and_gate_denial_never_certifies(clock, monkeypatch):
+    """A single 200 cannot conceal another selected report's new 404."""
+    reports = [f"{BASE}/reports/2026/11/intel--{i:024x}.html" for i in range(3)]
+    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *a: (reports, []))
+    monkeypatch.setattr(dcv, "CONFIRM_RUNS", 1)
+    verified = [dcv.ProbeResult(url, 200, 1.0, True) for url in reports]
+    net = FakeNet({reports[0]: 404})
+    dcv._GATE_VERDICTS.clear()
+    with patch.object(dcv, "_http_probe", side_effect=net.probe), \
+         patch.object(dcv, "_is_expected_publication_rejection",
+                      side_effect=lambda url: url == reports[0]):
+        p4 = dcv.phase4_convergence_confirmation([], MANIFEST, verified)
+    assert not p4.success
+    assert len([r for r in p4.probes if r.status_code == 200 and r.url in reports]) == 2
+    assert any(r.gate_rejected for r in p4.probes)
+    assert "0/1 consecutive clean passes" in p4.message
+    assert net.calls.count(reports[0]) == 1  # Don't hammer authoritative 404s.
+
+
+def test_phase4_mixed_http200_and_auth_only_401_never_certifies(clock, monkeypatch):
+    """Report 401 proves Worker reachability, never a delivered HTML report."""
+    reports = [f"{BASE}/reports/2026/11/intel--{i:024x}.html" for i in range(3)]
+    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *a: (reports, []))
+    monkeypatch.setattr(dcv, "CONFIRM_RUNS", 1)
+    verified = [dcv.ProbeResult(url, 200, 1.0, True) for url in reports]
+    net = FakeNet({reports[1]: 401})
+    with patch.object(dcv, "_http_probe", side_effect=net.probe):
+        p4 = dcv.phase4_convergence_confirmation([], MANIFEST, verified)
+    assert not p4.success
+    assert any(r.status_code == 401 for r in p4.probes)
+    assert net.calls.count(reports[1]) == 1
