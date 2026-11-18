@@ -49,6 +49,7 @@ SCRIPT_DEPENDENCIES = (
     "public_report_actor.py",
     "ioc_truth_engine.py",
     "attribution_evidence_engine.py",
+    "tlp_policy.py",  # imported by dossier_integrity at module load
 )
 
 
