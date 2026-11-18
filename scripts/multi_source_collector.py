@@ -57,7 +57,8 @@ ENV:
 """
 from __future__ import annotations
 import json, logging, os, re, sys, time, hashlib, urllib.request, urllib.error
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # ParseError compatibility for callers
+from defusedxml import ElementTree as _SafeET
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from pathlib import Path
@@ -91,8 +92,8 @@ def _now() -> str:
 
 # P0 HIGH/HIGH B314: public RSS sources are untrusted XML. Reject DTD/ENTITY
 # declarations and oversized payloads before expat receives any bytes.
-# Using XMLParser rather than direct ET.fromstring avoids unsafe raw parsing;
-# the byte cap bounds XML tree growth without adding a new dependency.
+# Enforce parser-level DTD/entity/external-reference protection via defusedxml.
+# The explicit size cap and declaration precheck are complementary guards.
 MAX_SOURCE_RESPONSE_BYTES = 8 * 1024 * 1024
 RSS_XML_MAX_BYTES = 2 * 1024 * 1024
 _XML_DECLARATION_FORBIDDEN = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.I)
@@ -105,9 +106,9 @@ def _parse_rss_xml(raw: str):
         raise ValueError("XML_SOURCE_SIZE_LIMIT")
     if _XML_DECLARATION_FORBIDDEN.search(raw):
         raise ValueError("XML_DTD_ENTITY_FORBIDDEN")
-    parser = ET.XMLParser(target=ET.TreeBuilder())
-    parser.feed(raw)
-    return parser.close()
+    return _SafeET.fromstring(
+        raw, forbid_dtd=True, forbid_entities=True, forbid_external=True
+    )
 
 
 
