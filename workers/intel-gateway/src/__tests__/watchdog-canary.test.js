@@ -144,6 +144,16 @@ test("canary CLI reports operator blockers instead of passing", () => {
   const pro = run("pro");
   assert.equal(pro.status, 10);
   assert.match(pro.stdout, /OPERATOR_CREDENTIAL_REQUIRED/);
+  // Offline loopback negative-control: failure must identify the fixed route
+  // category without exposing the API key, query or untrusted network errors.
+  const marker = "cdb_pro_secret_marker_never_log_0123456789";
+  const network = run("pro", { CDB_WATCHDOG_CANARY_PRO_KEY: marker });
+  assert.equal(network.status, 1);
+  const evidence = JSON.parse(network.stdout);
+  assert.equal(evidence.result, "FAIL");
+  assert.equal(evidence.step, "HTTP_GET_FEED");
+  assert.equal(evidence.error, "TRANSPORT_UNAVAILABLE");
+  assert.doesNotMatch(network.stdout + network.stderr, /cdb_pro_secret_marker|127\.0\.0\.1:9\/api\/feed|fetch failed/);
   const ent = run("enterprise", { CDB_WATCHDOG_CANARY_ENT_KEY: "cdb_ent_placeholder_not_real_0000000000" });
   assert.equal(ent.status, 11);
   assert.match(ent.stdout, /OPERATOR_WEBHOOK_SINK_REQUIRED/);
