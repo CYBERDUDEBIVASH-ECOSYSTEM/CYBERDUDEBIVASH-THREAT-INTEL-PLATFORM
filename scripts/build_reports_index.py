@@ -72,6 +72,7 @@ if _SCRIPTS_DIR not in sys.path:
 from canonical_timestamp import parse_timestamp  # noqa: E402
 import dossier_integrity as _di  # noqa: E402  (same severity authority used by dossier S1)
 from severity_epss_truth import kev_confirmed as _kev_confirmed  # noqa: E402
+from severity_epss_truth import epss_percent as _epss_percent  # noqa: E402 (same S8 authority)
 from public_report_actor import public_actor_label  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -489,7 +490,11 @@ def main() -> int:
         # as the public HTML S1. Raw feed actor_tag may contain paid or
         # heuristic-only fields; the HTML renderer masks it by policy.
         actor_tag   = public_actor_label(feed_item)
-        epss_score  = feed_item.get("epss_score")
+        # P0 public parity: report HTML S8 renders only evidence-verified EPSS
+        # *percent* through severity_epss_truth.epss_percent(). Raw epss_score
+        # may be a probability fraction, stale/unverified number or percent.
+        # Never advertise a raw value the dossier would truthfully display N/A.
+        epss_score  = _epss_percent(feed_item)
         kev_present = bool(feed_item.get("kev_present"))
         tlp         = str(feed_item.get("tlp") or "TLP:CLEAR")
 
