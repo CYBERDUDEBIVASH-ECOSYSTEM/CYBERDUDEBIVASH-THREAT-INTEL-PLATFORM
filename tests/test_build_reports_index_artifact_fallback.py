@@ -319,6 +319,20 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
         self.assertIsNone(self._entry(idx, report_id)["epss_score"])
 
 
+
+    def test_sparse_feed_explicit_unknown_recovers_non_cve_apex_label(self):
+        report_id = "intel--abc6666666666666"
+        self._write_report(report_id,
+                           _report_html("Non-Vulnerability Supply Chain Notice", "MEDIUM", 4.8))
+        self._write_feed([{
+            "id": report_id, "timestamp": _recent_ts(),
+            "severity": "UNKNOWN",
+        }])
+        entry = self._entry(self._run(), report_id)
+        self.assertEqual(entry["severity"], "MEDIUM")
+        self.assertEqual(entry["severity_basis"], "apex_heuristic")
+        self.assertEqual(entry["risk_score"], 4.8)
+
     def test_cvss_evidence_overrides_html_heuristic_severity(self):
         report_id = "intel--abc4444444444444"
         self._write_report(report_id,
