@@ -121,6 +121,33 @@ test("count/items mismatch is a publication-integrity failure", () => {
   assert.deepEqual([e.http_status, e.reason, e.checks.publication_integrity], [503, "publication_count_mismatch", "count_mismatch"]);
 });
 
+test("P0 health count integrity rejects malformed typed counts even when item length matches", () => {
+  for (const bad of ["2", "999", null, false, true, [], [2], {}, -1, 2.5, NaN, Infinity]) {
+    const got = evaluatePublicIntelligence(feed({ count: bad }), NOW);
+    assert.deepEqual(
+      [got.http_status, got.reason, got.checks.publication_integrity],
+      [503, "publication_count_mismatch", "count_mismatch"],
+      "invalid count type: " + String(bad),
+    );
+  }
+  // The older feed format may omit count entirely; do not break that API.
+  const legacy = feed();
+  delete legacy.count;
+  assert.equal(evaluatePublicIntelligence(legacy, NOW).http_status, 200);
+  assert.equal(evaluatePublicIntelligence(feed(), NOW).http_status, 200);
+});
+
+test("P0 /api/health rejects a string publication count without exposing feed items", async () => {
+  const malformed = { ...liveFeed(nowIso(-90)), count: "1" };
+  const { call } = harness(r2With(malformed));
+  const { res, body } = await call("/api/health");
+  assert.equal(res.status, 503);
+  assert.equal(body.status, "unhealthy");
+  assert.equal(body.reason, "publication_count_mismatch");
+  assert.equal(body.checks.publication_integrity, "count_mismatch");
+  assert.doesNotMatch(JSON.stringify(body), /intel--live/);
+});
+
 test("storage read failure (null) never pretends freshness", () => {
   const e = evaluatePublicIntelligence(null, NOW);
   assert.deepEqual([e.http_status, e.status, e.reason, e.intelligence.status], [503, "unhealthy", "feed_unavailable", "unavailable"]);
