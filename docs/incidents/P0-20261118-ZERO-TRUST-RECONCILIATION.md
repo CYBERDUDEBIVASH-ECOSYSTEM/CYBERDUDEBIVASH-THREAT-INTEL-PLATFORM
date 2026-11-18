@@ -22,7 +22,7 @@ Previous worktree `fix/p0-report-fetchback-evidence-20261118` passed 36 Python a
 2. Enforce **catalog EPSS provenance parity**: same verified FIRST.org `epss_percent` authority as dossier HTML S8. Reject unverified mixed-scale claims rather than converting heuristic scores into probabilities.
 3. Add **R2 chronology/registry rejection diagnostics** with bounded validator defect excerpts. Existing reject/no-publish behavior is unchanged.
 4. Limit upstream feed HTTP responses to **8 MiB** before decode; RSS XML to **2 MiB**. Reject DTD/ENTITY markup before XML parser; never process unbounded external XML.
-5. **Pin this collector's outbound egress to its seven known upstream HTTPS hosts**. Reject credentials, non-HTTPS schemes, fragments, explicit ports, unlisted hosts and cross-origin redirects before following them. Never forward GitHub or OTX authentication headers off-origin. Logging uses exception class only, no raw URL/query/header/token strings.
+5. **Pin this collector's outbound egress to its eight known upstream HTTPS hosts**. Reject credentials, non-HTTPS schemes, fragments, explicit ports, unlisted hosts and cross-origin redirects before following them. Never forward GitHub or OTX authentication headers off-origin. Logging uses exception class only, no raw URL/query/header/token strings.
 6. Include negative/security tests for XML entity rejection, oversize responses, origin allowlist, redirect isolation, EPSS parity, publication gate and catalog chronology/registry.
 7. Preserve [workflow inventory snapshot](P0-20261118-WORKFLOW-RELEASE-INVENTORY.md) of 73 YAML definitions; a filename inventory **does not** certify that every workflow passed.
 
@@ -30,7 +30,7 @@ Previous worktree `fix/p0-report-fetchback-evidence-20261118` passed 36 Python a
 
 - [ ] Exact **new branch HEAD** fetched and clean; run `python3 -m compileall`, the three targeted Python suites and Node fetch-back tests in WSL with real exit codes.
 - [ ] Run production-script **FULL baseline** Bandit + Semgrep scope, not merely changed-file SAST; review each original HIGH/HIGH finding and demonstrate no new findings. Do not blanket `nosec` or remove paths from scope.
-- [ ] Confirm the seven permitted feeds are still reachable and that benign same-host redirects work in a bounded test; verify off-origin redirects and source-size violations remain blocked.
+- [ ] Confirm the eight permitted feed endpoints are still reachable and that benign same-host redirects work in a bounded test; verify off-origin redirects and source-size violations remain blocked.
 - [ ] Run only an approved, cost-bounded publisher with **historical HTTP 200** content identity and valid TLP/provenance; independently verify sampled customer-ready report EPSS/severity/actor parity.
 - [ ] Validate PRO paid entitlement, customer API responses and negative authorization/tenant isolation without using real customer records or real charges.
 - [ ] Enforce required checks at protected main; check Cloudflare account-wide budget, current GitHub Actions headroom, rollback and DNS/route identity before deploy.
