@@ -59,6 +59,7 @@ from __future__ import annotations
 import json, logging, os, re, sys, time, hashlib, urllib.request, urllib.error
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 from pathlib import Path
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -155,13 +156,66 @@ def _observe_rss_item(item, entry, feed_url, retrieved_at, feed_labels):
                             "label_origin": "observed_rss_metadata"} for label in labels]
 
 
+# Explicit upstream admission prevents an intelligence feed or redirect from
+# reaching runner metadata, loopback, or a credential-bearing off-origin host.
+# These are the only production _get() call sites in this collector.
+TRUSTED_INTEL_HOSTS = frozenset({
+    "api.github.com", "www.cisa.gov", "urlhaus-api.abuse.ch",
+    "www.bleepingcomputer.com", "securityaffairs.com",
+    "cybersecuritynews.com", "otx.alienvault.com",
+})
+
+
+def _admitted_intel_host(url: str) -> str:
+    if not isinstance(url, str) or not url or len(url) > 2048:
+        raise ValueError("SOURCE_URL_NOT_ALLOWED")
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+        username = parts.username
+        password = parts.password
+    except ValueError as exc:
+        raise ValueError("SOURCE_URL_NOT_ALLOWED") from exc
+    if (parts.scheme != "https" or host not in TRUSTED_INTEL_HOSTS or
+            port is not None or username is not None or password is not None or
+            parts.fragment or not parts.netloc):
+        raise ValueError("SOURCE_URL_NOT_ALLOWED")
+    return host
+
+
+class _PinnedOriginRedirect(urllib.request.HTTPRedirectHandler):
+    """Allow relative/same-origin HTTPS redirects; block off-origin hops.
+
+    The GitHub/OTX authentication headers must never accompany a redirect
+    to another host. A rejected redirect remains a failed source fetch.
+    """
+    def __init__(self, original_host: str):
+        super().__init__()
+        self.original_host = original_host
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            if _admitted_intel_host(newurl) != self.original_host:
+                raise ValueError("SOURCE_REDIRECT_NOT_ALLOWED")
+        except ValueError:
+            raise urllib.error.HTTPError(req.full_url, code, "SOURCE_REDIRECT_NOT_ALLOWED", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_trusted_intel(req, timeout):
+    host = _admitted_intel_host(req.full_url)  # before any network access
+    opener = urllib.request.build_opener(_PinnedOriginRedirect(host))
+    return opener.open(req, timeout=timeout)
+
+
 def _get(url: str, headers: dict = None, timeout: int = 15):
     try:
         req = urllib.request.Request(url, headers=headers or {
             "Accept": "application/json",
             "User-Agent": "CDB-SENTINEL-APEX/1.0 (multi-source-collector)"
         })
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _open_trusted_intel(req, timeout=timeout) as r:
             ct = r.headers.get("Content-Type", "")
             # Bound the response BEFORE decoding/JSON/XML parsing. A broken
             # upstream must not exhaust the scheduled runner's memory.
@@ -173,7 +227,8 @@ def _get(url: str, headers: dict = None, timeout: int = 15):
                 return raw.decode("utf-8", errors="replace")
             return json.loads(raw.decode("utf-8", errors="replace"))
     except Exception as e:
-        log.warning("GET %s failed: %s", url[:80], e)
+        # Logs contain no raw URL/query, HTTP body, secret, or exception text.
+        log.warning("Source request rejected or failed (reason=%s)", type(e).__name__)
         return None
 
 
