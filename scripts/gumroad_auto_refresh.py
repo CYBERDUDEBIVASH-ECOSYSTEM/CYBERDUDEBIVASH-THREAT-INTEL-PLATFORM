@@ -381,84 +381,60 @@ def build_generic_description(feed: list[dict], product: dict) -> str:
 
 # ── Main Orchestration ────────────────────────────────────────────────────────
 def main() -> int:
-    token     = os.environ.get("GUMROAD_ACCESS_TOKEN", "").strip()
+    token = os.environ.get("GUMROAD_ACCESS_TOKEN", "").strip()
     feed_path = os.environ.get("FEED_PATH", "feed.json")
-    dry_run   = os.environ.get("GUMROAD_DRY_RUN", "").lower() in ("true", "1", "yes")
+    dry_run = os.environ.get("GUMROAD_DRY_RUN", "").lower() in ("true", "1", "yes")
+
+    # A manual run without an explicit live choice must not contact Gumroad.
+    # This check precedes ANY product/sales API call, even read-only requests.
+    feed = load_feed(feed_path)
+    if not isinstance(feed, list) or not feed:
+        log.error("P0 HOLD: Empty or invalid feed; no Gumroad operation authorized")
+        return 1
+    if dry_run:
+        log.info(
+            "[DRY RUN] Offline feed validation: %d advisories; "
+            "zero Gumroad API requests, products untouched", len(feed),
+        )
+        return 0
 
     if not token:
-        log.info("GUMROAD_ACCESS_TOKEN not set — skipping product refresh (non-fatal).")
-        return 0
+        log.error("P0 HOLD: Live Gumroad access token missing")
+        return 2
 
-    log.info("Loading feed from %s ...", feed_path)
-    feed = load_feed(feed_path)
-    if not feed:
-        log.error("Empty feed — cannot refresh product descriptions.")
-        return 1
+    # Exactly ONE explicitly approved detection-pack SKU per live canary.
+    # This variable is a repository-controlled allowlist value and MUST NOT
+    # be inferred from upstream Gumroad product names or customer input.
+    approved_id = os.environ.get("GUMROAD_APPROVED_PRODUCT_IDS", "").strip()
+    if GUMROAD_PRODUCT_ID_RE.fullmatch(approved_id) is None:
+        log.error("P0 HOLD: No single valid approved Gumroad product ID")
+        return 2
 
-    log.info("Feed loaded: %d advisories | dry_run=%s", len(feed), dry_run)
-
-    # Fetch all Gumroad products
-    log.info("Fetching Gumroad product catalog ...")
     products = list_products(token)
-    if not products:
-        log.warning("No products found on Gumroad account. Check token permissions.")
-        return 0
-
-    log.info("Found %d Gumroad products", len(products))
-
-    # Fetch recent sales for logging/metrics (non-fatal)
-    try:
-        sales_counts = fetch_recent_sales(token)
-        total_recent = sum(sales_counts.values())
-        log.info("Recent sales across all products: %d", total_recent)
-    except Exception as e:
-        log.warning("Sales fetch skipped: %s", e)
-        sales_counts = {}
-
-    updated = 0
-    skipped = 0
-    failed  = 0
-
-    for product in products:
-        pid    = product.get("id") or product.get("permalink") or ""
-        pname  = product.get("name", "Unnamed")
-        listed = product.get("published", False)
-
-        if not pid:
-            log.warning("Product with no ID/permalink — skipping: %s", pname)
-            skipped += 1
-            continue
-
-        if not listed:
-            log.info("Skipping unlisted product: %s", pname)
-            skipped += 1
-            continue
-
-        log.info("Processing product: %s [%s]", pname, pid)
-
-        if is_detection_pack(product):
-            new_desc = build_detection_pack_description(feed, product)
-            log.info("  -> Detection pack — full threat-driven description (%d chars)", len(new_desc))
-        else:
-            new_desc = build_generic_description(feed, product)
-            log.info("  -> Generic product — live stats injected (%d chars)", len(new_desc))
-
-        ok = update_product_description(token, pid, new_desc, dry_run=dry_run)
-        if ok:
-            updated += 1
-        else:
-            failed += 1
-
-    log.info(
-        "Gumroad refresh complete: %d updated | %d skipped | %d failed",
-        updated, skipped, failed,
-    )
-
-    # Non-zero exit only if ALL updates failed and at least one was attempted
-    if failed > 0 and updated == 0 and (updated + failed) > 0:
-        log.warning("All product updates failed — check GUMROAD_ACCESS_TOKEN permissions.")
+    if not isinstance(products, list) or not products:
+        log.error("P0 HOLD: Gumroad catalogue inaccessible or empty")
         return 1
 
+    approved = [
+        product for product in products
+        if (isinstance(product, dict)
+            and (product.get("id") or product.get("permalink")) == approved_id
+            and product.get("published") is True
+            and is_detection_pack(product))
+    ]
+    if len(approved) != 1:
+        log.error("P0 HOLD: Approved live detection pack not uniquely present and published")
+        return 2
+
+    product = approved[0]
+    description = build_detection_pack_description(feed, product)
+    if not description or len(description) > MAX_DESC_CHARS:
+        log.error("P0 HOLD: Invalid generated catalogue description")
+        return 1
+    if not update_product_description(token, approved_id, description, dry_run=False):
+        log.error("P0 HOLD: Approved Gumroad product update could not be verified")
+        return 1
+    log.info("Gumroad single approved detection-pack update completed")
     return 0
 
 
