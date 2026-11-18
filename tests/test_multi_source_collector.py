@@ -141,5 +141,58 @@ class TestFeedCapEnforcement(unittest.TestCase):
         )
 
 
+
+
+class TestUntrustedRssXmlParser(unittest.TestCase):
+    def test_valid_rss_without_dtd_parses_normally(self):
+        root = msc._parse_rss_xml("<rss><channel><item><title>Test</title></item></channel></rss>")
+        self.assertEqual(root.findtext(".//item/title"), "Test")
+
+    def test_doctype_and_entity_declarations_fail_closed(self):
+        for xml in (
+            '<!DOCTYPE rss [<!ENTITY ex "unsafe">]><rss><item>&ex;</item></rss>',
+            '<!DOCTYPE rss SYSTEM "file:///etc/passwd"><rss/>',
+            '<!ENTITY malicious "unsafe"><rss/>',
+        ):
+            with self.subTest(xml=xml[:24]), self.assertRaisesRegex(ValueError, "XML_DTD_ENTITY_FORBIDDEN"):
+                msc._parse_rss_xml(xml)
+
+    def test_oversize_xml_rejected_before_parser(self):
+        payload = "<rss>" + ("a" * (msc.RSS_XML_MAX_BYTES + 1)) + "</rss>"
+        with self.assertRaisesRegex(ValueError, "XML_SOURCE_SIZE_LIMIT"):
+            msc._parse_rss_xml(payload)
+
+    def test_malformed_feed_is_not_silently_accepted(self):
+        with self.assertRaises(msc.ET.ParseError):
+            msc._parse_rss_xml("<rss><item></rss>")
+
+
+class TestUntrustedSourceResponseCap(unittest.TestCase):
+    def test_http_reader_has_hard_maximum_and_rejects_oversize(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+                self.read_bound = None
+                self.headers = {"Content-Type": "application/json"}
+            def __enter__(self): return self
+            def __exit__(self, *unused): return False
+            def read(self, limit=-1):
+                self.read_bound = limit
+                return self.payload[:limit]
+        fake = FakeResponse(b"a" * (msc.MAX_SOURCE_RESPONSE_BYTES + 1))
+        with patch.object(msc.urllib.request, "urlopen", return_value=fake):
+            result = msc._get("https://github.com/example")
+        self.assertIsNone(result)
+        self.assertEqual(fake.read_bound, msc.MAX_SOURCE_RESPONSE_BYTES + 1)
+
+    def test_http_reader_retains_valid_small_json(self):
+        class FakeResponse:
+            headers = {"Content-Type": "application/json"}
+            def __enter__(self): return self
+            def __exit__(self, *unused): return False
+            def read(self, limit=-1): return b'{"ok":true}'[:limit]
+        with patch.object(msc.urllib.request, "urlopen", return_value=FakeResponse()):
+            self.assertEqual(msc._get("https://github.com/example"), {"ok": True})
+
 if __name__ == "__main__":
     unittest.main()
