@@ -45,6 +45,9 @@ REAL_SCRIPT = REPO_ROOT_REAL / "scripts" / "build_reports_index.py"
 SCRIPT_DEPENDENCIES = (
     "canonical_timestamp.py",
     "dossier_integrity.py",
+    # dossier_integrity imports the real TLP authority at module import time.
+    # Preserve its fail-closed publication semantics in the isolated fixture.
+    "tlp_policy.py",
     "severity_epss_truth.py",
     "public_report_actor.py",
     "ioc_truth_engine.py",
@@ -100,6 +103,18 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
             shutil.copy(source, self.tmp / "scripts" / module)
         (self.tmp / "reports" / "2026" / "08").mkdir(parents=True)
         (self.tmp / "api" / "reports").mkdir(parents=True)
+
+    def test_isolated_fixture_copies_real_tlp_authority_without_stubs(self):
+        """Avoid false report-index failures from missing transitive imports."""
+        real = REPO_ROOT_REAL / "scripts" / "tlp_policy.py"
+        isolated = self.tmp / "scripts" / "tlp_policy.py"
+        self.assertTrue(isolated.is_file())
+        self.assertEqual(isolated.read_bytes(), real.read_bytes())
+        proc = subprocess.run(
+            [sys.executable, "-c", "import dossier_integrity; import tlp_policy"],
+            cwd=self.tmp / "scripts", capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
