@@ -131,7 +131,13 @@ export function evaluatePublicIntelligence(feedData, nowMs = Date.now()) {
   ).length;
   const freshness = classifyManifestFreshness(feedData.generated_at, nowMs);
   const generatedAt = typeof feedData.generated_at === "string" ? feedData.generated_at : null;
-  const countOk = typeof feedData.count !== "number" || feedData.count === items.length;
+  // A published count, when present, is a typed integrity assertion.
+  // Previously any non-number (e.g. "999", null, false, []) bypassed this
+  // gate and could make /api/health claim FRESH while the dashboard withheld
+  // the same corrupted feed. Preserve legacy feeds with the field absent.
+  const countOk = !Object.prototype.hasOwnProperty.call(feedData, "count") ||
+    (Number.isSafeInteger(feedData.count) &&
+     feedData.count >= 0 && feedData.count === items.length);
   const intelligence = {
     status: freshness.state,
     generated_at: generatedAt,
