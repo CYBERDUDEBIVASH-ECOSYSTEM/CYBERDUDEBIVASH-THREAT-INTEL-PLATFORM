@@ -383,7 +383,7 @@ def build_generic_description(feed: list[dict], product: dict) -> str:
 def main() -> int:
     token = os.environ.get("GUMROAD_ACCESS_TOKEN", "").strip()
     feed_path = os.environ.get("FEED_PATH", "feed.json")
-    dry_run = os.environ.get("GUMROAD_DRY_RUN", "").lower() in ("true", "1", "yes")
+    dry_run = os.environ.get("GUMROAD_DRY_RUN", "true").lower() in ("true", "1", "yes")
 
     # A manual run without an explicit live choice must not contact Gumroad.
     # This check precedes ANY product/sales API call, even read-only requests.
