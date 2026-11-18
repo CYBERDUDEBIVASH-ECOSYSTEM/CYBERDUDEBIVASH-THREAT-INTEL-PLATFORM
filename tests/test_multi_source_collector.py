@@ -141,9 +141,6 @@ class TestFeedCapEnforcement(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 
 class TestUntrustedRssXmlParser(unittest.TestCase):
@@ -196,3 +193,6 @@ class TestUntrustedSourceResponseCap(unittest.TestCase):
             def read(self, limit=-1): return b'{"ok":true}'[:limit]
         with patch.object(msc.urllib.request, "urlopen", return_value=FakeResponse()):
             self.assertEqual(msc._get("https://github.com/example"), {"ok": True})
+
+if __name__ == "__main__":
+    unittest.main()
