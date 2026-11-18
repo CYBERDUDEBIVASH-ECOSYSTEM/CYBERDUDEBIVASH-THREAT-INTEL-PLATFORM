@@ -56,13 +56,13 @@ class GumroadFulfillment:
                         tier="enterprise"
                     )
                     
-                    logging.info(f"Fulfillment Success: Provisioned {new_api_key} for {buyer_email}")
+                    logging.info("Fulfillment Success: Verified license accepted and credential provisioned")
                     return new_api_key
                 else:
-                    logging.warning(f"Fulfillment Declined: Invalid Gumroad key {license_key}")
+                    logging.warning("Fulfillment Declined: Provider rejected license verification")
                     return None
             except Exception as e:
-                logging.error(f"Fulfillment API Error: {str(e)}")
+                logging.error("Fulfillment API Error: %s", type(e).__name__)
                 return None
 
 # Global Instance
