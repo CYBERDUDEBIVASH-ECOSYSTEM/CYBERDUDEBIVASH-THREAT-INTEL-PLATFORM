@@ -3,6 +3,7 @@ import asyncio
 import httpx
 import logging
 from typing import Callable, Any
+from agent.fulfillment.gumroad_purchase_policy import verified_purchase
 
 logger = logging.getLogger("CDB_LICENSE_GUARD")
 
@@ -20,7 +21,8 @@ def apex_license_guard(product_id: str):
             if not license_key:
                 raise PermissionError("Access Denied: No license key provided for APEX features.")
 
-            # 2. Non-blocking verification against Gumroad API v2
+            # 2. Require a CURRENT provider receipt, not a writable in-memory
+            # flag from a prior session. No unsigned/unbounded offline grace.
             try:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
@@ -28,22 +30,27 @@ def apex_license_guard(product_id: str):
                         data={
                             "product_id": product_id,
                             "license_key": license_key,
-                            "increment_uses_count": "false" # Heartbeat check only
+                            "increment_uses_count": "false",
                         },
-                        timeout=5.0
+                        timeout=5.0,
                     )
+                    response.raise_for_status()
                     data = response.json()
-                    
-                    if not data.get("success") or data.get("purchase", {}).get("refunded"):
-                        logger.warning(f"Invalid license key attempt: {license_key}")
-                        raise PermissionError("Access Denied: Invalid or expired Sentinel APEX license.")
-                    
-            except httpx.RequestError as exc:
-                # 0 FAILURE FALLBACK: If Gumroad is down, we allow cached valid state 
-                # to prevent breaking legitimate user workflows.
-                logger.error(f"License server unreachable: {exc}. Using grace period.")
-                if not getattr(self, 'is_authenticated', False):
-                    raise ConnectionError("License server unreachable. Please check connection.")
+            except (httpx.HTTPError, ValueError) as exc:
+                self.is_authenticated = False
+                logger.warning("License verifier unavailable or invalid (%s)", type(exc).__name__)
+                raise ConnectionError(
+                    "Enterprise license cannot be verified; access denied."
+                ) from None
+
+            if verified_purchase(
+                data, product_id=product_id, license_key=license_key
+            ) is None:
+                self.is_authenticated = False
+                logger.warning("Inactive or unverifiable Enterprise license rejected")
+                raise PermissionError(
+                    "Access Denied: Invalid or expired Sentinel APEX license."
+                )
 
             # 3. Success: Mark client as authenticated and execute elite feature
             self.is_authenticated = True
