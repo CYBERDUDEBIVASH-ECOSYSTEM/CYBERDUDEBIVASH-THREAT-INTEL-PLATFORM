@@ -119,6 +119,13 @@ jobs:
         run: |
           python -m pytest tests/test_p0_tenant_revenue_failclosed.py -q --tb=short
 
+      - name: P0 Gumroad active-purchase and SDK zero-trust regression
+        run: |
+          # Targeted governance dependency; preserve the repo's httpx>=0.27 floor
+          # without installing the entire paid/LLM platform requirements.
+          python -m pip install 'httpx==0.28.1' --quiet
+          python -m pytest tests/test_p0_gumroad_entitlement_zero_trust.py -q --tb=short
+
       - name: Run deployment governance gate
         run: |
           python scripts/deployment_gate.py --strict --skip-tests
