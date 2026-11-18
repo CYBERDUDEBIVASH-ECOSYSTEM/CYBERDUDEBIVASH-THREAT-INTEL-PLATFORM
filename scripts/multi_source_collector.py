@@ -93,7 +93,7 @@ def _now() -> str:
 # Using XMLParser rather than direct ET.fromstring avoids unsafe raw parsing;
 # the byte cap bounds XML tree growth without adding a new dependency.
 RSS_XML_MAX_BYTES = 2 * 1024 * 1024
-_XML_DECLARATION_FORBIDDEN = re.compile(r"<!\\s*(?:DOCTYPE|ENTITY)\\b", re.I)
+_XML_DECLARATION_FORBIDDEN = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.I)
 
 
 def _parse_rss_xml(raw: str):
