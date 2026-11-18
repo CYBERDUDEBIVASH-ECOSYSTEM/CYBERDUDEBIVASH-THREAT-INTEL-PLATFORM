@@ -183,7 +183,10 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
         idx = self._run()
         entry = self._entry(idx, "intel--bbb2222222222222")
         self.assertEqual(entry["title"], "CVE-2099-00001 Something Bad Happened")
-        self.assertEqual(entry["severity"], "HIGH")
+        # The artifact's 7.6/10 tactical risk is NOT an authoritative CVSS
+        # score. A CVE with no feed CVSS must never claim a rated HIGH.
+        self.assertEqual(entry["severity"], "UNRATED")
+        self.assertEqual(entry["severity_basis"], "none")
         self.assertEqual(entry["risk_score"], 7.6)
 
     def test_artifact_fallback_works_with_plain_description_meta(self):
@@ -193,7 +196,21 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
         idx = self._run()
         entry = self._entry(idx, "intel--ccc3333333333333")
         self.assertEqual(entry["severity"], "MEDIUM")
+        self.assertEqual(entry["severity_basis"], "apex_heuristic")
         self.assertEqual(entry["risk_score"], 5.2)
+
+    def test_feed_cvss_rating_wins_over_artifact_heuristic_without_conflating_risk(self):
+        report_id = "intel--9ab1231231231231"
+        self._write_report(report_id, _report_html("CVE-2099-00008 RCE",
+                                                    "MEDIUM", 3.0))
+        self._write_feed([{"id": report_id, "timestamp": _recent_ts(),
+                           "title": "CVE-2099-00008 RCE", "severity": "LOW",
+                           "cvss_score": 9.4}])
+        entry = self._entry(self._run(), report_id)
+        self.assertEqual(entry["severity"], "CRITICAL")
+        self.assertEqual(entry["severity_basis"], "cvss_reported")
+        # APEX 3/10 remains a separate score: CVSS is not inferred from it.
+        self.assertEqual(entry["risk_score"], 3.0)
 
     # 5/8. Missing canonical record + genuinely unknown severity/risk -> honest state, no fabrication.
     def test_missing_severity_stays_honestly_unknown_not_fabricated(self):
