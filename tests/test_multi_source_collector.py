@@ -261,6 +261,17 @@ class TestTrustedIntelEgress(unittest.TestCase):
             build.assert_not_called()
 
 
+    def test_untrusted_network_exceptions_and_query_tokens_are_not_logged(self):
+        with patch.object(msc, "_open_trusted_intel",
+                          side_effect=ValueError("Bearer PRIVATE-UNTRUSTED-TEXT")):
+            with self.assertLogs("COLLECTOR", level="WARNING") as captured:
+                self.assertIsNone(msc._get("https://api.github.com/advisories?secret=SENSITIVE"))
+        output = "\\n".join(captured.output)
+        self.assertNotIn("SENSITIVE", output)
+        self.assertNotIn("PRIVATE-UNTRUSTED-TEXT", output)
+        self.assertNotIn("advisories?secret=", output)
+
+
 class TestMalwareBazaarTrustedPost(unittest.TestCase):
     def test_post_enforces_bounded_read_and_preserves_method(self):
         class FakeResponse:
