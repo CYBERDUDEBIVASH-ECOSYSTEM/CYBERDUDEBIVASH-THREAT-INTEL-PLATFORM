@@ -126,6 +126,10 @@ jobs:
           python -m pip install 'httpx==0.28.1' --quiet
           python -m pytest tests/test_p0_gumroad_entitlement_zero_trust.py -q --tb=short
 
+      - name: P0 Gumroad catalogue dry-run and egress fail-closed regression
+        run: |
+          python -m pytest tests/test_p0_gumroad_refresh_fail_closed.py -q --tb=short
+
       - name: Run deployment governance gate
         run: |
           python scripts/deployment_gate.py --strict --skip-tests
