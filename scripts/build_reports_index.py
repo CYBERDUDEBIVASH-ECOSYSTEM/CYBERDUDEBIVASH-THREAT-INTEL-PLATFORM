@@ -488,7 +488,8 @@ def main() -> int:
             _basis_item = dict(feed_item)
             if not _basis_item.get("title") and title:
                 _basis_item["title"] = title
-            if not _basis_item.get("severity") and severity != "UNKNOWN":
+            if (not _basis_item.get("severity") or
+                    str(_basis_item["severity"]).strip().upper() == "UNKNOWN") and severity != "UNKNOWN":
                 _basis_item["severity"] = severity
             _basis = _di.severity_basis(
                 _basis_item, feed_item.get("cvss_score"), _kev_confirmed(feed_item)
