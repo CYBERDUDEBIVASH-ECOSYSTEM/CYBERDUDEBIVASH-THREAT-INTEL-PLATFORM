@@ -1,0 +1,176 @@
+{
+  "type": "bundle",
+  "id": "bundle--b6bc149d-fc0a-4e8a-b78f-8e63a8648d02",
+  "spec_version": "2.1",
+  "objects": [
+    {
+      "type": "identity",
+      "spec_version": "2.1",
+      "id": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "name": "CyberDudeBivash SENTINEL APEX",
+      "description": "CyberDudeBivash Pvt. Ltd. - Global Cybersecurity Intelligence Infrastructure",
+      "identity_class": "organization",
+      "sectors": [
+        "technology"
+      ],
+      "contact_information": "contact@cyberdudebivash.in",
+      "created": "2024-01-01T00:00:00Z",
+      "modified": "2024-01-01T00:00:00Z"
+    },
+    {
+      "type": "marking-definition",
+      "spec_version": "2.1",
+      "id": "marking-definition--34098fce-860f-479c-ad6f-e09814c4f58a",
+      "created": "2017-01-20T00:00:00.000Z",
+      "definition_type": "tlp",
+      "definition": {
+        "tlp": "green"
+      }
+    },
+    {
+      "type": "intrusion-set",
+      "spec_version": "2.1",
+      "id": "intrusion-set--b161e2b5-35ac-4376-b31e-0e00b910dc09",
+      "name": "CDB-UNATTR-CVE Campaign",
+      "description": "Critical Java Vulnerability Requires Immediate Patching",
+      "created": "2026-11-18T01:36:55Z",
+      "modified": "2026-11-18T01:36:55Z",
+      "confidence": 26,
+      "aliases": [
+        "CDB-UNATTR-CVE"
+      ],
+      "extensions": {
+        "x-cdb-apex-1": {
+          "predictive_score": 5.0,
+          "campaign_id": "UNCLASSIFIED",
+          "campaign_confidence": 5.0,
+          "threat_category": "Remote Code Execution",
+          "behavioral_tags": [],
+          "ai_summary": "Initial access via rce",
+          "risk_factors": [
+            "IOC_density",
+            "MITRE_coverage"
+          ],
+          "soc_priority": "P3",
+          "threat_level": "MEDIUM",
+          "recommended_action": "Medium severity threat (score 5.0/10) — limited technical indicators in source data",
+          "x_cdb_published_at": "2026-11-17T12:00:00Z",
+          "x_cdb_source_url": "https://www.cisa.gov/news-events/alerts/2026/11/17/critical-java-vulnerability-requires-immediate-patching",
+          "x_cdb_source_name": "cisa.gov",
+          "x_cdb_retrieval_timestamp": "2026-11-18T01:36:28Z",
+          "x_cdb_publication_timestamp": "2026-11-17T12:00:00Z",
+          "x_cdb_content_hash": "ccfebbb60d6fc822cee8b2cde94b1ae873a55b795e5999af0925956973f3c236",
+          "x_cdb_content_hash_scope": "rss_entry_fields_sha256",
+          "x_cdb_evidence_count": 1,
+          "x_cdb_evidence_basis": [
+            "captured_rss_entry"
+          ],
+          "x_cdb_trust_score": 7.77
+        }
+      },
+      "object_marking_refs": [
+        "marking-definition--34098fce-860f-479c-ad6f-e09814c4f58a"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "vulnerability",
+      "spec_version": "2.1",
+      "id": "vulnerability--8337df60-8c52-4c50-ab6a-fc4c4b6dfcf2",
+      "name": "CVE-2026-114938",
+      "created": "2026-11-18T01:36:55Z",
+      "modified": "2026-11-18T01:36:55Z",
+      "external_references": [
+        {
+          "source_name": "cve",
+          "external_id": "CVE-2026-114938",
+          "url": "https://nvd.nist.gov/vuln/detail/CVE-2026-114938"
+        }
+      ],
+      "object_marking_refs": [
+        "marking-definition--34098fce-860f-479c-ad6f-e09814c4f58a"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--85541bb2-f9a6-48b6-9a28-27c613a2b551",
+      "relationship_type": "exploits",
+      "source_ref": "intrusion-set--b161e2b5-35ac-4376-b31e-0e00b910dc09",
+      "target_ref": "vulnerability--8337df60-8c52-4c50-ab6a-fc4c4b6dfcf2",
+      "created": "2026-11-18T01:36:55Z",
+      "modified": "2026-11-18T01:36:55Z",
+      "object_marking_refs": [
+        "marking-definition--34098fce-860f-479c-ad6f-e09814c4f58a"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--02d357fc-9f36-4fc4-9b7a-69f758bad111",
+      "name": "Exploit Public-Facing Application",
+      "created": "2026-11-18T01:36:55Z",
+      "modified": "2026-11-18T01:36:55Z",
+      "object_marking_refs": [
+        "marking-definition--34098fce-860f-479c-ad6f-e09814c4f58a"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1190",
+          "url": "https://attack.mitre.org/techniques/T1190/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--3c5320b6-4c08-48ee-92e8-d2d24fc67d5c",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--b161e2b5-35ac-4376-b31e-0e00b910dc09",
+      "target_ref": "attack-pattern--02d357fc-9f36-4fc4-9b7a-69f758bad111",
+      "created": "2026-11-18T01:36:55Z",
+      "modified": "2026-11-18T01:36:55Z",
+      "object_marking_refs": [
+        "marking-definition--34098fce-860f-479c-ad6f-e09814c4f58a"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--19ca5b49-4d68-4bfd-ac36-d90555446339",
+      "name": "Command and Scripting Interpreter",
+      "created": "2026-11-18T01:36:55Z",
+      "modified": "2026-11-18T01:36:55Z",
+      "object_marking_refs": [
+        "marking-definition--34098fce-860f-479c-ad6f-e09814c4f58a"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1059",
+          "url": "https://attack.mitre.org/techniques/T1059/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--d9c2a0df-82f1-48e1-8055-f970e083dad2",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--b161e2b5-35ac-4376-b31e-0e00b910dc09",
+      "target_ref": "attack-pattern--19ca5b49-4d68-4bfd-ac36-d90555446339",
+      "created": "2026-11-18T01:36:55Z",
+      "modified": "2026-11-18T01:36:55Z",
+      "object_marking_refs": [
+        "marking-definition--34098fce-860f-479c-ad6f-e09814c4f58a"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    }
+  ]
+}
