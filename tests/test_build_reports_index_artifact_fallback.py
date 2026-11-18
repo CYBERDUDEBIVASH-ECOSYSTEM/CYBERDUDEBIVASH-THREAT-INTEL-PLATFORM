@@ -338,3 +338,29 @@ class TestSingleWriterOwnership(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    # P0 report fetch-back: builder and human dossier must share the proven
+    # EPSS percentage reader, never publish a raw mixed-scale estimate.
+    def test_catalog_epss_uses_authoritative_first_org_percent(self):
+        report_id = "intel--abc1111111111111"
+        self._write_report(report_id, _report_html("Verified EPSS Report", "HIGH", 7.0))
+        self._write_feed([{
+            "id": report_id, "title": "Verified EPSS Report",
+            "timestamp": _recent_ts(), "severity": "HIGH",
+            "epss_score": 0.184, "epss_pct": 0.184,
+            "epss_source": "FIRST.org", "epss": "0.184%",
+        }])
+        idx = self._run()
+        self.assertEqual(self._entry(idx, report_id)["epss_score"], 0.184)
+
+    def test_catalog_withholds_unverified_mixed_scale_epss(self):
+        report_id = "intel--abc2222222222222"
+        self._write_report(report_id, _report_html("Unverified EPSS Report", "HIGH", 7.0))
+        self._write_feed([{
+            "id": report_id, "title": "Unverified EPSS Report",
+            "timestamp": _recent_ts(), "severity": "HIGH",
+            "epss_score": 53, "epss": "0.53%",
+        }])
+        idx = self._run()
+        self.assertIsNone(self._entry(idx, report_id)["epss_score"])
