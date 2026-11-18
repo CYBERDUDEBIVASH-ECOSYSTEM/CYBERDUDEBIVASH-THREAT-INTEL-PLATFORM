@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import textwrap
 import urllib.error
@@ -80,40 +81,78 @@ DETECTION_PACK_NAME_PREFIX = "sentinel apex detection pack"
 
 
 # ── Gumroad API Layer ─────────────────────────────────────────────────────────
+# A manually approved catalogue update must never take the bearer token to a
+# foreign origin, a non-HTTPS URL, or an unapproved API operation.
+GUMROAD_MAX_API_BYTES = 2 * 1024 * 1024
+GUMROAD_PRODUCT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+
+
+class _RejectGumroadRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # No following 301/302/307/308 with bearer credentials, even to
+        # the same host. Investigate provider changes rather than downgrade.
+        raise urllib.error.HTTPError(req.full_url, code, "GUMROAD_REDIRECT_DENIED", headers, fp)
+
+
+def _open_gumroad(req, timeout: float = 20):
+    if not req.full_url.startswith(GUMROAD_BASE + "/"):
+        raise ValueError("GUMROAD_ORIGIN_NOT_ALLOWED")
+    opener = urllib.request.build_opener(_RejectGumroadRedirect())
+    return opener.open(req, timeout=timeout)
+
+
+def _gumroad_allowed_request(method: str, path: str, data: dict | None) -> bool:
+    if method == "GET":
+        return path in ("/products", "/sales") and data is None
+    if method == "PUT" and isinstance(path, str) and path.startswith("/products/"):
+        product_id = path.removeprefix("/products/")
+        return (GUMROAD_PRODUCT_ID_RE.fullmatch(product_id) is not None
+                and isinstance(data, dict)
+                and set(data) == {"description"}
+                and isinstance(data["description"], str)
+                and 0 < len(data["description"]) <= MAX_DESC_CHARS)
+    return False
+
+
 def gm_request(token: str, method: str, path: str,
                data: dict | None = None) -> dict:
-    """Gumroad API v2 request. Returns parsed JSON dict."""
-    url = f"{GUMROAD_BASE}{path}"
-    body: bytes | None = None
-    if data is not None:
-        # Gumroad uses form-encoded PUT bodies
-        body = urllib.parse.urlencode(data).encode()
+    """Make a bounded, HTTPS-only Gumroad request with no redirect or secret logs."""
+    if not isinstance(token, str) or not token.strip() or not _gumroad_allowed_request(method, path, data):
+        log.error("Gumroad request denied: missing authorization or invalid API operation")
+        return {"success": False, "error": "GUMROAD_REQUEST_NOT_ALLOWED"}
+    url = GUMROAD_BASE + path
+    body = urllib.parse.urlencode(data).encode("utf-8") if data is not None else None
     req = urllib.request.Request(
-        url,
-        data=body,
-        method=method,
+        url, data=body, method=method,
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/x-www-form-urlencoded",
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode(errors="replace")[:400]
-        log.error("Gumroad %s %s HTTP %d: %s", method, path, e.code, err_body)
-        return {"success": False, "error": f"HTTP {e.code}: {err_body}"}
-    except Exception as e:
-        log.error("Gumroad %s %s error: %s", method, path, e)
-        return {"success": False, "error": str(e)}
+        with _open_gumroad(req, timeout=20) as resp:
+            raw = resp.read(GUMROAD_MAX_API_BYTES + 1)
+            if len(raw) > GUMROAD_MAX_API_BYTES:
+                log.error("Gumroad response exceeded size limit")
+                return {"success": False, "error": "GUMROAD_RESPONSE_TOO_LARGE"}
+            result = json.loads(raw.decode("utf-8"))
+            if not isinstance(result, dict):
+                return {"success": False, "error": "GUMROAD_RESPONSE_INVALID"}
+            return result
+    except urllib.error.HTTPError as exc:
+        # Never log untrusted provider error bodies or URLs containing secrets.
+        log.error("Gumroad HTTP request failed (status=%s)", exc.code)
+        return {"success": False, "error": "GUMROAD_HTTP_ERROR"}
+    except Exception as exc:
+        log.error("Gumroad request failed (reason=%s)", type(exc).__name__)
+        return {"success": False, "error": "GUMROAD_REQUEST_FAILED"}
 
 
 def list_products(token: str) -> list[dict]:
     """Return all Gumroad products for this account."""
     resp = gm_request(token, "GET", "/products")
-    if not resp.get("success"):
-        log.warning("list_products failed: %s", resp.get("message", resp.get("error")))
+    if resp.get("success") is not True:
+        log.warning("Gumroad catalogue read was not verified")
         return []
     return resp.get("products", [])
 
@@ -127,19 +166,18 @@ def update_product_description(token: str, product_id: str,
     resp = gm_request(token, "PUT", f"/products/{product_id}", {
         "description": description,
     })
-    ok = bool(resp.get("success"))
+    ok = resp.get("success") is True
     if ok:
-        log.info("Updated product %s OK", product_id)
+        log.info("Gumroad provider acknowledged a single product update")
     else:
-        log.warning("Update product %s FAILED: %s", product_id,
-                    resp.get("message", resp.get("error")))
+        log.warning("Gumroad provider did not verify the requested update")
     return ok
 
 
 def fetch_recent_sales(token: str) -> dict[str, int]:
     """Returns {product_id: sale_count} for recent sales (metrics only)."""
     resp = gm_request(token, "GET", "/sales")
-    if not resp.get("success"):
+    if resp.get("success") is not True:
         return {}
     sales = resp.get("sales", [])
     counts: dict[str, int] = {}
@@ -342,84 +380,64 @@ def build_generic_description(feed: list[dict], product: dict) -> str:
 
 # ── Main Orchestration ────────────────────────────────────────────────────────
 def main() -> int:
-    token     = os.environ.get("GUMROAD_ACCESS_TOKEN", "").strip()
+    token = os.environ.get("GUMROAD_ACCESS_TOKEN", "").strip()
     feed_path = os.environ.get("FEED_PATH", "feed.json")
-    dry_run   = os.environ.get("GUMROAD_DRY_RUN", "").lower() in ("true", "1", "yes")
+    mode = os.environ.get("GUMROAD_DRY_RUN", "true").strip().lower()
+    if mode not in ("true", "false"):
+        log.error("P0 HOLD: Invalid dry-run value, explicit true or false required")
+        return 2
+    dry_run = mode == "true"
+
+    # A manual run without an explicit live choice must not contact Gumroad.
+    # This check precedes ANY product/sales API call, even read-only requests.
+    feed = load_feed(feed_path)
+    if not isinstance(feed, list) or not feed:
+        log.error("P0 HOLD: Empty or invalid feed; no Gumroad operation authorized")
+        return 1
+    if dry_run:
+        log.info(
+            "[DRY RUN] Offline feed validation: %d advisories; "
+            "zero Gumroad API requests, products untouched", len(feed),
+        )
+        return 0
 
     if not token:
-        log.info("GUMROAD_ACCESS_TOKEN not set — skipping product refresh (non-fatal).")
-        return 0
+        log.error("P0 HOLD: Live Gumroad access token missing")
+        return 2
 
-    log.info("Loading feed from %s ...", feed_path)
-    feed = load_feed(feed_path)
-    if not feed:
-        log.error("Empty feed — cannot refresh product descriptions.")
-        return 1
+    # Exactly ONE explicitly approved detection-pack SKU per live canary.
+    # This variable is a repository-controlled allowlist value and MUST NOT
+    # be inferred from upstream Gumroad product names or customer input.
+    approved_id = os.environ.get("GUMROAD_APPROVED_PRODUCT_IDS", "").strip()
+    if GUMROAD_PRODUCT_ID_RE.fullmatch(approved_id) is None:
+        log.error("P0 HOLD: No single valid approved Gumroad product ID")
+        return 2
 
-    log.info("Feed loaded: %d advisories | dry_run=%s", len(feed), dry_run)
-
-    # Fetch all Gumroad products
-    log.info("Fetching Gumroad product catalog ...")
     products = list_products(token)
-    if not products:
-        log.warning("No products found on Gumroad account. Check token permissions.")
-        return 0
-
-    log.info("Found %d Gumroad products", len(products))
-
-    # Fetch recent sales for logging/metrics (non-fatal)
-    try:
-        sales_counts = fetch_recent_sales(token)
-        total_recent = sum(sales_counts.values())
-        log.info("Recent sales across all products: %d", total_recent)
-    except Exception as e:
-        log.warning("Sales fetch skipped: %s", e)
-        sales_counts = {}
-
-    updated = 0
-    skipped = 0
-    failed  = 0
-
-    for product in products:
-        pid    = product.get("id") or product.get("permalink") or ""
-        pname  = product.get("name", "Unnamed")
-        listed = product.get("published", False)
-
-        if not pid:
-            log.warning("Product with no ID/permalink — skipping: %s", pname)
-            skipped += 1
-            continue
-
-        if not listed:
-            log.info("Skipping unlisted product: %s", pname)
-            skipped += 1
-            continue
-
-        log.info("Processing product: %s [%s]", pname, pid)
-
-        if is_detection_pack(product):
-            new_desc = build_detection_pack_description(feed, product)
-            log.info("  -> Detection pack — full threat-driven description (%d chars)", len(new_desc))
-        else:
-            new_desc = build_generic_description(feed, product)
-            log.info("  -> Generic product — live stats injected (%d chars)", len(new_desc))
-
-        ok = update_product_description(token, pid, new_desc, dry_run=dry_run)
-        if ok:
-            updated += 1
-        else:
-            failed += 1
-
-    log.info(
-        "Gumroad refresh complete: %d updated | %d skipped | %d failed",
-        updated, skipped, failed,
-    )
-
-    # Non-zero exit only if ALL updates failed and at least one was attempted
-    if failed > 0 and updated == 0 and (updated + failed) > 0:
-        log.warning("All product updates failed — check GUMROAD_ACCESS_TOKEN permissions.")
+    if not isinstance(products, list) or not products:
+        log.error("P0 HOLD: Gumroad catalogue inaccessible or empty")
         return 1
 
+    approved = [
+        product for product in products
+        if (isinstance(product, dict)
+            and (product.get("id") or product.get("permalink")) == approved_id
+            and product.get("published") is True
+            and is_detection_pack(product))
+    ]
+    if len(approved) != 1:
+        log.error("P0 HOLD: Approved live detection pack not uniquely present and published")
+        return 2
+
+    product = approved[0]
+    description = build_detection_pack_description(feed, product)
+    if not description or len(description) > MAX_DESC_CHARS:
+        log.error("P0 HOLD: Invalid generated catalogue description")
+        return 1
+    if not update_product_description(token, approved_id, description, dry_run=False):
+        log.error("P0 HOLD: Approved Gumroad product update could not be verified")
+        return 1
+    log.info("Gumroad single approved detection-pack update completed")
     return 0
 
 

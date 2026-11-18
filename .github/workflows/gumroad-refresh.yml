@@ -43,11 +43,16 @@ on:
       dry_run:
         description: 'Dry run (log only, no Gumroad API calls)'
         required: false
-        default: 'false'
+        default: 'true'
         type: choice
         options:
           - 'false'
           - 'true'
+      live_confirmation:
+        description: 'Explicit authorization phrase for a single live approved detection pack'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -62,11 +67,8 @@ concurrency:
 
 jobs:
   refresh-products:
-    # Only run on scheduled trigger OR successful sentinel-blogger run OR manual dispatch
-    if: >
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    # No schedule, push or workflow_run reactivation; manual MAIN only.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -79,14 +81,31 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: " Validate token"
+      - name: " P0 authorization and token preflight — fail closed"
+        env:
+          GUMROAD_ACCESS_TOKEN: ${{ secrets.GUMROAD_ACCESS_TOKEN }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          LIVE_CONFIRMATION: ${{ inputs.live_confirmation }}
+          APPROVED_PRODUCT_IDS: ${{ vars.GUMROAD_APPROVED_PRODUCT_IDS }}
+        shell: bash
         run: |
-          if [ -z "${{ secrets.GUMROAD_ACCESS_TOKEN }}" ]; then
-            echo "::notice::GUMROAD_ACCESS_TOKEN not set -- skipping product refresh."
-            echo "To enable: Settings  Secrets  Actions  GUMROAD_ACCESS_TOKEN"
-            echo "SKIP_GM=true" >> $GITHUB_ENV
+          set -euo pipefail
+          if [ "${DRY_RUN_INPUT}" = 'true' ]; then
+            echo 'SKIP_GM=false' >> "$GITHUB_ENV"
+            echo 'Dry-run authorized: feed-only, zero external HTTP calls'
+          elif [ "${DRY_RUN_INPUT}" = 'false' ]; then
+            if [ "${LIVE_CONFIRMATION}" != 'APPROVE_ONE_DETECTION_PACK_UPDATE' ]; then
+              echo '::error::P0 HOLD: missing exact live owner confirmation'
+              exit 2
+            fi
+            if [ -z "${GUMROAD_ACCESS_TOKEN:-}" ] || [ -z "${APPROVED_PRODUCT_IDS:-}" ]; then
+              echo '::error::P0 HOLD: live token or approved-product allowlist absent'
+              exit 2
+            fi
+            echo 'SKIP_GM=false' >> "$GITHUB_ENV"
           else
-            echo "SKIP_GM=false" >> $GITHUB_ENV
+            echo '::error::P0 HOLD: invalid dry-run choice'
+            exit 2
           fi
 
       - name: " Locate feed.json"
@@ -120,6 +139,7 @@ jobs:
         env:
           GUMROAD_ACCESS_TOKEN: ${{ secrets.GUMROAD_ACCESS_TOKEN }}
           GUMROAD_DRY_RUN:      ${{ env.GUMROAD_DRY_RUN }}
+          GUMROAD_APPROVED_PRODUCT_IDS: ${{ vars.GUMROAD_APPROVED_PRODUCT_IDS }}
           FEED_PATH:            ${{ env.FEED_PATH }}
         run: |
           echo "=== SENTINEL APEX v${PLATFORM_VERSION} -- Gumroad Auto-Refresh ==="
@@ -127,7 +147,4 @@ jobs:
           python3 scripts/gumroad_auto_refresh.py
           echo "Gumroad refresh complete."
 
-      - name: " Skipped (no token)"
-        if: env.SKIP_GM == 'true'
-        run: |
-          echo "::notice::Gumroad refresh skipped -- GUMROAD_ACCESS_TOKEN not set."
+
