@@ -410,3 +410,64 @@ test('optional malformed MITRE/IOC preview fields do not break table or drawer',
   assert.match(nodes.drawerBody.innerHTML,/None mapped/);
   assert.match(html,/row\.published_at\|\|row\.published\|\|row\.timestamp/);
 });
+
+
+test('late server STIX bundle is not exported after session logout',async()=>{
+  const from=html.indexOf('function csvCell(value){');
+  const to=html.indexOf('// ── Watchlists ──',from);
+  assert.ok(from>=0&&to>from);
+  const state={jwtToken:'JWT-test',apiKey:'',authEpoch:0,exportRequestId:0,
+    feedLoaded:true,filtered:[{title:'paid'}]};
+  let resolveResponse,files=0;
+  const pending=new Promise(resolve=>resolveResponse=resolve);
+  const ctx={STATE:state,BASE:'https://intel.cyberdudebivash.com',
+    fetchWithTimeout:async()=>pending,authHeaders:()=>({Authorization:'Bearer JWT-test'}),
+    toast:()=>{},console:{warn:()=>{}},triggerExportDownload:()=>{files++}};
+  vm.runInNewContext(html.slice(from,to)+'this.exportData=exportData;',ctx);
+  const exportRun=ctx.exportData('stix');
+  await Promise.resolve();
+  state.jwtToken='';state.authEpoch++;state.exportRequestId++;
+  resolveResponse({ok:true,status:200,json:async()=>({
+    type:'bundle',id:'bundle--22e6b438-3d3f-4ea0-8dba-61a9e043e148',
+    objects:[{type:'indicator',spec_version:'2.1',
+      id:'indicator--22e6b438-3d3f-4ea0-8dba-61a9e043e148'}]
+  })});
+  await exportRun;
+  assert.equal(files,0,'no paid bundle after logout');
+});
+test('logout clears displayed paid data and cancels in-flight API Console output',async()=>{
+  let from=html.indexOf('async function runConsole(){');
+  let to=html.indexOf('// ── Refresh ──',from);
+  assert.ok(from>=0&&to>from);
+  const nodes=Object.fromEntries(['consoleEndpoint','consoleApiKey','apiResponse',
+    'consoleTimer','actorRegistryStatus','actorRegistryBody','authStatus','clearAuthBtn',
+    'feedTier','drawerBody','detailDrawer','drawerOverlay'].map(k=>
+    [k,{textContent:'',innerHTML:'',value:'',style:{display:'block'},
+      className:'',classList:{remove:()=>{}}}]));
+  nodes.consoleEndpoint.value='/api/feed';
+  nodes.consoleApiKey.value='cdb_live_secret_example';
+  const state={jwtToken:'paidJWT',apiKey:'',authEpoch:0,consoleRequestId:0,
+    actorRequestId:0,feedRequestId:0,exportRequestId:0,authAttemptId:0,
+    actorRows:[],manifest:[{id:'paid'}],filtered:[{id:'paid'}],feedLoaded:true};
+  const ctx={STATE:state,document:{getElementById:k=>nodes[k]||null},
+    BASE:'https://intel.cyberdudebivash.com',refreshData:()=>{}};
+  let resolveAPI;const pending=new Promise(resolve=>resolveAPI=resolve);
+  ctx.fetchWithTimeout=async()=>pending;
+  vm.runInNewContext(html.slice(from,to)+'this.runConsole=runConsole;',ctx);
+  from=html.indexOf('function clearAuth(){');
+  to=html.indexOf('function authHeaders(){',from);
+  vm.runInNewContext(html.slice(from,to)+'this.clearAuth=clearAuth;',ctx);
+  const executing=ctx.runConsole();
+  await Promise.resolve();
+  ctx.clearAuth();
+  resolveAPI({ok:true,status:200,statusText:'OK',headers:{get:()=> 'application/json'},
+    json:async()=>({secret:'POST_LOGOUT_DATA'})});
+  await executing;
+  assert.equal(state.jwtToken,'');
+  assert.equal(state.feedLoaded,false);
+  assert.equal(state.manifest.length,0);
+  assert.equal(state.filtered.length,0);
+  assert.equal(nodes.consoleApiKey.value,'');
+  assert.equal(nodes.apiResponse.textContent,'');
+  assert.doesNotMatch(nodes.apiResponse.textContent,/POST_LOGOUT_DATA/);
+});
