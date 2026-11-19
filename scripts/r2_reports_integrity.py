@@ -77,6 +77,7 @@ BUCKET_DATA     = "sentinel-apex-data"
 MAX_WORKERS     = 20          # Parallel S3 head-object workers
 MAX_CHECK       = 200         # Max index entries to verify (limits runtime)
 CHECK_TIMEOUT   = 15          # Per-request timeout (seconds)
+R2_S3_REGION   = "auto"      # Cloudflare R2-only; never inherit global AWS region
 
 
 # ---------------------------------------------------------------------------
@@ -137,25 +138,44 @@ def _r2_object_exists(
     endpoint: str,
     key_id: str,
     secret: str,
-) -> bool:
-    """Returns True if the object exists in R2 (authenticated S3 head-object)."""
-    env = os.environ.copy()
-    env["AWS_ACCESS_KEY_ID"]     = key_id
-    env["AWS_SECRET_ACCESS_KEY"] = secret
+) -> Optional[bool]:
+    """Tri-state S3 HEAD: present=True, proven 404=False, unknown=None.
 
-    result = subprocess.run(
-        [
-            "aws", "s3api", "head-object",
-            "--bucket",       bucket,
-            "--key",          key,
-            "--endpoint-url", endpoint,
-        ],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=CHECK_TIMEOUT,
-    )
-    return result.returncode == 0
+    A credential, signing-region or network failure is *not* proof that an
+    object is absent.  Never permit such failures to delete customer catalog
+    entries.  Use R2's explicit auto signing region without mutating AWS
+    account configuration globally.
+    """
+    env = os.environ.copy()
+    env["AWS_ACCESS_KEY_ID"] = key_id
+    env["AWS_SECRET_ACCESS_KEY"] = secret
+    try:
+        result = subprocess.run(
+            [
+                "aws", "s3api", "head-object",
+                "--bucket", bucket,
+                "--key", key,
+                "--endpoint-url", endpoint,
+                "--region", R2_S3_REGION,
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=CHECK_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    if result.returncode == 0:
+        return True
+    # Only an explicit S3 HeadObject not-found is a confirmed absent object.
+    # Do not mistake 400 InvalidRegionName, 403 AccessDenied or other errors
+    # for 404, or expose the raw AWS CLI stderr in CI logs.
+    detail = result.stderr or ""
+    if ("HeadObject operation" in detail and
+            any(marker in detail for marker in ("(404)", "(NoSuchKey)", "(NotFound)"))):
+        return False
+    return None
 
 
 def _s3_cp(
@@ -176,6 +196,7 @@ def _s3_cp(
             "aws", "s3", "cp", local_path,
             f"s3://{bucket}/{key}",
             "--endpoint-url",  endpoint,
+            "--region",        R2_S3_REGION,
             "--content-type",  "application/json",
             "--cache-control", "no-cache, no-store, must-revalidate",
             "--only-show-errors",
@@ -310,7 +331,7 @@ def main() -> int:
              len(all_keys_to_check), MAX_WORKERS)
 
     # --- Parallel R2 existence checks ---
-    key_exists: Dict[str, bool] = {}
+    key_exists: Dict[str, Optional[bool]] = {}
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         future_to_key = {
@@ -323,14 +344,23 @@ def main() -> int:
             k = future_to_key[future]
             try:
                 exists = future.result()
-            except Exception as exc:
-                log.warning("R2 check error for %s: %s -- treating as present (conservative)", k, exc)
-                exists = True   # never purge on check error
+            except Exception:
+                # An exception cannot establish either presence or absence.
+                exists = None
             key_exists[k] = exists
 
     # --- Tally results ---
-    missing_keys: Set[str] = {k for k, v in key_exists.items() if not v}
-    present_keys: Set[str] = {k for k, v in key_exists.items() if v}
+    # Stop *before any local catalog mutation* if any HEAD could not be
+    # authenticated or completed.  UNKNOWN must never become MISSING.
+    unverifiable_keys: Set[str] = {k for k, v in key_exists.items() if v is None}
+    if unverifiable_keys:
+        log.error("R2 integrity verification blocked: %d unverifiable HEAD result(s); catalog unchanged",
+                  len(unverifiable_keys))
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS",
+                          f"BLOCKED_UNVERIFIABLE_HEAD_{len(unverifiable_keys)}")
+        return 2
+    missing_keys: Set[str] = {k for k, v in key_exists.items() if v is False}
+    present_keys: Set[str] = {k for k, v in key_exists.items() if v is True}
 
     log.info("R2 check results: %d present / %d missing (of %d checked)",
              len(present_keys), len(missing_keys), len(key_exists))
@@ -345,6 +375,15 @@ def main() -> int:
         log.warning("Missing current-run reports from R2:")
         for mk in sorted(current_missing)[:10]:
             log.warning("  MISSING: %s", mk)
+
+    # All current-run reports provably absent: fail without wiping the
+    # catalog to zero.  The independent release gate remains red.
+    if current_run_keys and not current_present and current_missing:
+        log.error("HARD FAIL: all %d checked current-run reports confirmed absent; catalog unchanged",
+                  len(current_missing))
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS",
+                          f"HARD_FAIL_all_{len(current_missing)}_current_run_reports_missing")
+        return 1
 
     # --- Purge stale entries from index ---
     clean_entries: List[dict] = []
@@ -440,18 +479,6 @@ def main() -> int:
     # HARD FAIL only when ALL current-run reports are missing from R2.
     # This means the upload mechanism itself is broken (credentials, bucket, etc.).
     # A partial failure (some historical entries missing) is non-fatal after purge.
-    if current_run_keys and len(current_present) == 0 and len(current_missing) > 0:
-        log.error("=" * 70)
-        log.error("HARD FAIL: STAGE 3.5 HTML upload to sentinel-apex-reports is BROKEN")
-        log.error("ALL %d current-run reports are missing from R2.", len(current_missing))
-        log.error("Root cause: CF_R2_REPORTS_KEY_ID / CF_R2_REPORTS_SECRET_KEY may be")
-        log.error("  invalid, missing, or the sentinel-apex-reports bucket is unreachable.")
-        log.error("ACTION REQUIRED: Verify secrets and bucket permissions.")
-        log.error("=" * 70)
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS",
-                          f"HARD_FAIL_all_{len(current_missing)}_current_run_reports_missing")
-        return 1
-
     # Partial current-run failure (some missing, some present) -- warn but continue
     if current_missing:
         log.warning("WARN: %d/%d current-run reports missing from R2 (partial upload failure)",
