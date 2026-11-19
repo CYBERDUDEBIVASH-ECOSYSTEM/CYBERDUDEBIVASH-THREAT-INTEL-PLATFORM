@@ -472,9 +472,6 @@ class TestCorsZeroTrustWildcardAllowlist(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 class TestFrontendIntegritySyncShellBoundary(unittest.TestCase):
     """Always-run SAST gate for GitHub PR branch-name shell injection."""
 
@@ -495,3 +492,6 @@ class TestFrontendIntegritySyncShellBoundary(unittest.TestCase):
         ):
             self.assertIn(safe_command, bash_source)
 
+
+if __name__ == "__main__":
+    unittest.main()
