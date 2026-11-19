@@ -240,7 +240,7 @@ def _a7_ioc_audit(items: list) -> dict:
     hardened_ioc_items = 0
     for i in items:
         iocs = i.get("iocs") or []
-        if any(ioc.get("p20_hardened") for ioc in iocs):
+        if any(isinstance(ioc, dict) and ioc.get("p20_hardened") for ioc in iocs):
             hardened_ioc_items += 1
 
     n = max(len(items), 1)
@@ -472,27 +472,27 @@ def _a13_worldwide_release(audits: dict, items: list) -> dict:
     blockers = []
     warnings = []
 
-    # Check each audit dimension
+    # Never label failed regression, commercial or enterprise certification
+    # as worldwide-ready. Warnings still prevent worldwide certification.
+    # The final customer-delivery and deployment gates remain separate.
     for code, result in audits.items():
         if not result.get("passed"):
-            if code in ("A1", "A3", "A8"):  # Critical
+            if code in ("A1", "A3", "A8", "A10", "A11", "A12"):
                 blockers.append(f"{code}: {result.get('notes','')}")
             else:
                 warnings.append(f"{code}: {result.get('notes','')}")
 
-    # Additional global checks
-    if len(items) == 0:
+    if not items:
         blockers.append("Feed is empty — no intelligence to certify")
 
-    # Derive release tier
-    if len(blockers) == 0 and len(warnings) <= 2:
-        tier = "WORLDWIDE_RELEASE"
-    elif len(blockers) == 0:
-        tier = "ENTERPRISE_RELEASE"
-    elif len(blockers) <= 2 and not any("empty" in b for b in blockers):
-        tier = "CONTROLLED_RELEASE"
-    else:
+    if blockers:
         tier = "RELEASE_BLOCKED"
+    elif not warnings:
+        tier = "WORLDWIDE_RELEASE"
+    elif len(warnings) <= 2:
+        tier = "ENTERPRISE_RELEASE"
+    else:
+        tier = "CONTROLLED_RELEASE"
 
     return {
         "release_tier":    tier,
