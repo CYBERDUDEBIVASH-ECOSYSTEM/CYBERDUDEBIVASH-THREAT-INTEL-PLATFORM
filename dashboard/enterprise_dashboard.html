@@ -738,11 +738,11 @@ function parseManifest(d){
 }
 function resolveActor(e){
   if(!e || e.actor_paywall?.allowed===false) return 'Unattributed';
-  const value=[e.actor_display_name,e.actor,e.actor_tag].find(a=>typeof a==='string'&&a.trim());
-  if(!value) return 'Unattributed';
-  const tag=value.trim();
-  if(/^(?:UNC(?:-|$)|CDB-UNATTR|UNATTRIBUTED|UNKNOWN|N\/A|RANSOMWARE ACTOR|NATION-STATE APT|SUPPLY CHAIN ACTOR)/i.test(tag)) return 'Unattributed';
-  return tag.slice(0,120);
+  const candidates=[e.actor_display_name,e.actor,e.actor_tag];
+  // "Unknown Threat Actor" is a public-feed placeholder, not attribution.
+  const value=candidates.find(a=>typeof a==='string'&&a.trim()&&
+    !/^(?:UNC(?:-|$)|CDB-UNATTR|UNATTRIBUTED|UNKNOWN(?:\s+THREAT\s+ACTOR)?|N\/A|NOT\s+ATTRIBUTED|RANSOMWARE ACTOR|NATION-STATE APT|SUPPLY CHAIN ACTOR)/i.test(a.trim()));
+  return value?value.trim().slice(0,120):'Unattributed';
 }
 function updateConnectionStatus(label,ok){
   const el=document.getElementById('connectionLabel'),dot=document.getElementById('connectionDot'),status=document.getElementById('connectionStatus');
@@ -784,10 +784,21 @@ async function loadManifest(){
       const data=await resp.json();
       if(!isCurrent())return;
       if(!data||typeof data!=='object'||data.status==='unhealthy'||data.status==='error'){error='Invalid live response';continue;}
+      // Public feed freshness is authoritative, not a UI assumption.
+      if(src.label==='Public Preview'){
+        const preview=data.preview;
+        const age=preview?.age_seconds,maxAge=preview?.max_age_seconds;
+        const generated=preview?.generated_at;
+        const verified=preview&&preview.freshness_status==='FRESH'&&
+          preview.publication_state==='fresh'&&
+          Number.isFinite(age)&&age>=0&&Number.isFinite(maxAge)&&maxAge>0&&age<=maxAge&&
+          typeof generated==='string'&&Number.isFinite(Date.parse(generated));
+        if(!verified){error='Preview stale or missing verified publication freshness';continue;}
+      }
       const items=parseManifest(data).filter(item=>item&&typeof item==='object'&&!Array.isArray(item));
       if(!items.length){error=src.label+' returned no current advisories';continue;}
       STATE.manifest=items.map(item=>({...item,actor_tag:resolveActor(item)}))
-        .sort((a,b)=>(Date.parse(b.timestamp||b.published)||0)-(Date.parse(a.timestamp||a.published)||0));
+        .sort((a,b)=>(Date.parse(b.published_at||b.published||b.timestamp||0)||0)-(Date.parse(a.published_at||a.published||a.timestamp||0)||0));
       STATE.feedLoaded=true;
       const preview=src.label==='Public Preview';
       document.getElementById('feedSource').textContent=src.label+' ('+items.length+' visible items)';
@@ -878,7 +889,8 @@ function renderTable(){
 
   body.innerHTML=slice.map((e,i)=>{
     const title=(e.title||'Unknown Advisory').substring(0,85);
-    const ts=e.timestamp?new Date(e.timestamp).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'—';
+    const published=e.published_at||e.published||e.timestamp;
+    const ts=published&&Number.isFinite(Date.parse(published))?new Date(published).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'—';
     const actor=e.actor_tag||'Unattributed';
     const tactics=(e.mitre_tactics||[]).slice(0,2).map(t=>`<span class="tag tag-mitre">${esc(t)}</span>`).join('');
     let iocCount=e.ioc_count||0;
