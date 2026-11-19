@@ -474,3 +474,24 @@ class TestCorsZeroTrustWildcardAllowlist(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestFrontendIntegritySyncShellBoundary(unittest.TestCase):
+    """Always-run SAST gate for GitHub PR branch-name shell injection."""
+
+    def test_untrusted_pr_branch_ref_never_enters_bash_source(self):
+        workflow = (WORKFLOWS_DIR / "frontend-integrity-sync.yml").read_text(encoding="utf-8")
+        step_name = "      - name: Commit and push onto this PR's own branch if the registry changed"
+        self.assertEqual(workflow.count(step_name), 1, "Checksum push step absent or duplicated")
+        step = workflow.split(step_name, 1)[1].split("\n  # ---------------------------------------------------------------------------", 1)[0]
+        self.assertIn("PR_HEAD_REF: ${{ github.head_ref }}", step)
+        self.assertEqual(step.count("        run: |"), 1)
+        bash_source = step.split("        run: |", 1)[1]
+        self.assertNotIn("${{ github.head_ref }}", bash_source,
+                         "GitHub head_ref is untrusted; pass it via an env variable, never interpolate into shell")
+        for safe_command in (
+            'git push origin "HEAD:${PR_HEAD_REF}"',
+            'git fetch origin "${PR_HEAD_REF}"',
+            'git rebase "origin/${PR_HEAD_REF}"',
+        ):
+            self.assertIn(safe_command, bash_source)
+
