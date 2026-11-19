@@ -625,10 +625,10 @@ async function authenticateKey(){
   st.textContent = 'Validating key...';
   try {
     // Exchange key for JWT
-    const r = await fetch(BASE+'/api/auth/login', {
+    const r = await fetchWithTimeout(BASE+'/api/auth/login', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({api_key:key})
-    });
+    },10000);
     const d = await r.json();
     if(r.ok && d.token){
       STATE.apiKey = key;
@@ -687,7 +687,7 @@ async function loadActorRegistry(){
   status.textContent='Loading authorized actor profiles…';
   body.innerHTML='<tr><td colspan="4">Loading…</td></tr>';
   try{
-    const resp=await fetchWithTimeout(BASE+'/api/actors?limit=100',{headers:authHeaders()},12000);
+    const resp=await fetchWithTimeout(BASE+'/api/actors?limit=200',{headers:authHeaders()},12000);
     if(resp.status===401||resp.status===403){
       status.textContent='Actor registry access denied: key lacks read:actors scope.';
       body.innerHTML='<tr><td colspan="4">Contact support for authorized actor access.</td></tr>';return;
@@ -695,9 +695,9 @@ async function loadActorRegistry(){
     if(!resp.ok)throw new Error('HTTP '+resp.status);
     const data=await resp.json();
     if(!Array.isArray(data?.data?.actors))throw new Error('Invalid actor registry response');
-    const actors=data.data.actors.filter(x=>x&&typeof x.name==='string').slice(0,100);
+    const actors=data.data.actors.filter(x=>x&&typeof x.name==='string').slice(0,200);
     STATE.actorRows=actors;
-    status.textContent='Attributed actors returned: '+actors.length+' (API limit: 100; not total database coverage).';
+    status.textContent='Attributed actors returned: '+actors.length+' (API response capped at 200; not a claim of total database coverage).';
     body.innerHTML=actors.length?actors.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+esc(x.activity_count??'Not reported')+
       '</td><td>'+esc(x.last_seen||'Not reported')+'</td><td>'+esc(x.ttp_count??'Not reported')+'</td></tr>').join(''):
       '<tr><td colspan="4">No source-attributed actor records available in the current registry.</td></tr>';
