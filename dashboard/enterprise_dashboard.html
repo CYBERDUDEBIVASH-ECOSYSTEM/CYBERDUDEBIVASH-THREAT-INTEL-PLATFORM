@@ -590,6 +590,8 @@ const STATE = {
   authAttemptId: 0,
   feedRequestId: 0,
   actorRequestId: 0,
+  consoleRequestId: 0,
+  exportRequestId: 0,
   page: 1,
   filter: 'all',
   query: '',
@@ -649,7 +651,8 @@ async function authenticateKey(){
     if(attempt!==STATE.authAttemptId)return;
     if(r.ok && d.token){
       STATE.authEpoch++;
-      STATE.apiKey = key;
+      // The exchanged JWT is sufficient; do not retain the long-lived raw key.
+      STATE.apiKey = '';
       STATE.jwtToken = d.token;
       // Credentials remain memory-only; reload/navigation requires re-authentication.
       const tier = d.tier || 'unknown';
@@ -683,7 +686,24 @@ function clearAuth(){
   STATE.authEpoch++;
   STATE.feedRequestId++;
   STATE.actorRequestId++;
+  STATE.consoleRequestId++;
+  STATE.exportRequestId++;
   STATE.apiKey = ''; STATE.jwtToken = '';
+  STATE.manifest=[];STATE.filtered=[];STATE.feedLoaded=false;
+  const consoleKey=document.getElementById('consoleApiKey');
+  if(consoleKey)consoleKey.value='';
+  const responseBox=document.getElementById('apiResponse');
+  if(responseBox){responseBox.textContent='';responseBox.style.display='none';}
+  const responseTimer=document.getElementById('consoleTimer');
+  if(responseTimer){responseTimer.textContent='';responseTimer.style.display='none';}
+  const drawer=document.getElementById('drawerBody');
+  if(drawer)drawer.innerHTML='';
+  const drawerEl=document.getElementById('detailDrawer');
+  if(drawerEl)drawerEl.classList.remove('open');
+  const overlay=document.getElementById('drawerOverlay');
+  if(overlay)overlay.classList.remove('open');
+  if(typeof showMetricsUnavailable==='function')showMetricsUnavailable();
+  if(typeof applyFilters==='function')applyFilters();
   STATE.actorRows=[];
   document.getElementById('actorRegistryStatus').textContent='Authenticate to view source-attributed actor records.';
   document.getElementById('actorRegistryBody').innerHTML='<tr><td colspan="4">API key required</td></tr>';
@@ -1061,17 +1081,22 @@ async function exportData(fmt){
   // indicators from a free preview, synthetic "0.0.0.0" patterns or
   // internal non-UUID advisory IDs. The server decides the entitlement.
   if(fmt==='stix'){
+    const epoch=STATE.authEpoch||0;
+    const requestId=STATE.exportRequestId=(STATE.exportRequestId||0)+1;
+    const isCurrent=()=>epoch===(STATE.authEpoch||0)&&requestId===STATE.exportRequestId;
     if(!STATE.jwtToken&&!STATE.apiKey){
       toast('Sign in with an authorized API key for STIX export','error');return;
     }
     try{
       const response=await fetchWithTimeout(BASE+'/taxii/collections/sentinel-apex-main/objects/',
         {headers:authHeaders()},15000);
+      if(!isCurrent())return;
       if(response.status===401||response.status===403){
         toast('STIX export requires valid subscription access','error');return;
       }
       if(!response.ok)throw new Error('STIX service unavailable');
       const bundle=await response.json();
+      if(!isCurrent())return;
       const uuid=/^[a-z][a-z0-9-]*--[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       if(!bundle||bundle.type!=='bundle'||!uuid.test(bundle.id)||
           !Array.isArray(bundle.objects)||bundle.objects.length===0||
@@ -1082,7 +1107,7 @@ async function exportData(fmt){
       triggerExportDownload(JSON.stringify(bundle,null,2),
         'sentinel_apex_stix_'+Date.now()+'.json','application/stix+json');
       toast('Server-issued STIX bundle downloaded');
-    }catch(e){console.warn('[ED] STIX export refused',e.message);toast('STIX bundle unavailable or invalid; no file exported','error');}
+    }catch(e){if(!isCurrent())return;console.warn('[ED] STIX export refused',e.message);toast('STIX bundle unavailable or invalid; no file exported','error');}
     return;
   }
   if(fmt!=='json'&&fmt!=='csv'){toast('Unsupported export format','error');return;}
@@ -1378,6 +1403,9 @@ function selectEndpoint(ep){
 }
 
 async function runConsole(){
+  const epoch=STATE.authEpoch||0;
+  const requestId=STATE.consoleRequestId=(STATE.consoleRequestId||0)+1;
+  const isCurrent=()=>epoch===(STATE.authEpoch||0)&&requestId===STATE.consoleRequestId;
   const ep=document.getElementById('consoleEndpoint').value;
   const key=document.getElementById('consoleApiKey').value.trim();
   const pre=document.getElementById('apiResponse');
@@ -1391,15 +1419,18 @@ async function runConsole(){
   else if(STATE.jwtToken) h['Authorization']='Bearer '+STATE.jwtToken;
   try{
     const r=await fetchWithTimeout(BASE+ep,{headers:h},15000);
+    if(!isCurrent())return;
     const ms=Date.now()-t0;
     const ct=r.headers.get('content-type')||'';
     let body;
     if(ct.includes('json')) body=JSON.stringify(await r.json(),null,2);
     else body=await r.text();
+    if(!isCurrent())return;
     pre.textContent=`// HTTP ${r.status} ${r.statusText} (${ms}ms)\n// Endpoint: GET ${BASE+ep}\n\n`+body;
     timer.textContent='Response: '+ms+'ms | Status: '+r.status+' | Content-Type: '+ct;
     pre.style.color=r.ok?'var(--accent)':'var(--critical)';
   }catch(e){
+    if(!isCurrent())return;
     pre.textContent='// ERROR: '+e.message+'\n\n// The Worker endpoint is at:\n// '+BASE+ep;
     pre.style.color='var(--critical)';
     timer.textContent='Request failed: '+e.message;
@@ -1407,6 +1438,7 @@ async function runConsole(){
 }
 
 function clearConsole(){
+  STATE.consoleRequestId=(STATE.consoleRequestId||0)+1;
   document.getElementById('apiResponse').style.display='none';
   document.getElementById('apiResponse').textContent='';
   document.getElementById('consoleTimer').style.display='none';
