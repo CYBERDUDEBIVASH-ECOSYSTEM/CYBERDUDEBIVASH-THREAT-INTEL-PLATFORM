@@ -299,3 +299,12 @@ test('paid 401/403 feed denial is never disguised by anonymous preview fallback'
     assert.equal(elements.feedTier.textContent,'Access unverified');
   }
 });
+
+test('SLA component fields are escaped and invalid uptime is not certified',()=>{
+  const block=html.slice(html.indexOf('// Components table'),html.indexOf('// Credit policy',html.indexOf('// Components table')));
+  assert.match(block,/esc\(name\)/);
+  assert.match(block,/esc\(c\.status\|\|'—'\)/);
+  assert.match(block,/Number\.isFinite\(c\.uptime\)/);
+  assert.match(block,/c\.uptime<=100/);
+  assert.doesNotMatch(block,/\$\{name\}/);
+});
