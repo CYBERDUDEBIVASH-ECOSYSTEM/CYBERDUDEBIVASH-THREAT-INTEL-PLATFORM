@@ -178,3 +178,66 @@ test('watchlist items never enter inline event handlers, and dangerous text stay
   assert.equal(typeof widget.onclick,'function');
   assert.equal(typeof widget.onkeydown,'function');
 });
+
+
+test('older concurrent feed response cannot replace newer verified source',async()=>{
+  const start=html.indexOf('async function loadManifest(){'),end=html.indexOf('function setLoading(on){',start);
+  const {parseManifest,resolveActor}=pureDashboardFunctions();
+  const state={authEpoch:0,feedRequestId:0,manifest:[],apiKey:'',jwtToken:'',feedLoaded:false};
+  let resolveOld,calls=0;
+  const old=new Promise(resolve=>{resolveOld=resolve});
+  const document={getElementById:()=>({textContent:''})};
+  const ctx={STATE:state,document,BASE:'https://intel.cyberdudebivash.com',
+    fetchWithTimeout:async()=>++calls===1?old:{ok:true,json:async()=>({preview:{items:[{id:'new'}]}})},
+    authHeaders:()=>({}),parseManifest,resolveActor,setLoading:()=>{},
+    updateConnectionStatus:()=>{},showMetricsUnavailable:()=>{},
+    applyFilters:()=>{},updateMetrics:()=>{},checkWatchlistAlerts:()=>{},console,Date};
+  vm.runInNewContext(html.slice(start,end)+';this.loadManifest=loadManifest;',ctx);
+  const first=ctx.loadManifest();
+  await Promise.resolve();
+  await ctx.loadManifest();
+  resolveOld({ok:true,json:async()=>({preview:{items:[{id:'old'}]}})});
+  await first;
+  assert.equal(state.manifest.length,1);
+  assert.equal(state.manifest[0].id,'new');
+});
+test('logout invalidates pending token exchange before it can resurrect paid access',async()=>{
+  const start=html.indexOf('async function authenticateKey(){'),end=html.indexOf('function authHeaders(){',start);
+  assert.ok(start>=0&&end>start);
+  const state={apiKey:'',jwtToken:'',authEpoch:0,authAttemptId:0,feedRequestId:0,actorRequestId:0,actorRows:[]};
+  const elements=Object.fromEntries(['apiKeyInput','authStatus','clearAuthBtn','feedTier',
+    'consoleApiKey','actorRegistryStatus','actorRegistryBody','panel-actors'].map(id=>
+    [id,{value:'',textContent:'',innerHTML:'',style:{},classList:{contains:()=>false}}]));
+  elements.apiKeyInput.value='cdb_live_test_good_key_123456';
+  let resolveLogin;
+  const deferred=new Promise(resolve=>{resolveLogin=resolve});
+  const ctx={STATE:state,document:{getElementById:k=>elements[k]},BASE:'https://intel.cyberdudebivash.com',
+    fetchWithTimeout:async()=>deferred,toast:()=>{},refreshData:()=>{},loadActorRegistry:()=>{}};
+  vm.runInNewContext(html.slice(start,end)+';this.authenticateKey=authenticateKey;this.clearAuth=clearAuth;',ctx);
+  const login=ctx.authenticateKey();
+  await Promise.resolve();
+  ctx.clearAuth();
+  resolveLogin({ok:true,json:async()=>({token:'old.jwt',tier:'enterprise'})});
+  await login;
+  assert.equal(state.jwtToken,'');
+  assert.equal(state.apiKey,'');
+  assert.equal(state.authEpoch,1);
+});
+test('actor query denies late privileged rows after session generation changes',async()=>{
+  const start=html.indexOf('async function loadActorRegistry(){'),end=html.indexOf('// ── Data Loading ──',start);
+  const state={apiKey:'',jwtToken:'signed.jwt',authEpoch:0,actorRequestId:0,actorRows:[]};
+  const elements={actorRegistryStatus:{textContent:''},actorRegistryBody:{innerHTML:''}};
+  let resolveActorQuery;
+  const deferred=new Promise(resolve=>{resolveActorQuery=resolve});
+  const ctx={STATE:state,document:{getElementById:k=>elements[k]},BASE:'https://intel.cyberdudebivash.com',
+    fetchWithTimeout:async()=>deferred,authHeaders:()=>({Authorization:'Bearer signed.jwt'}),esc:String};
+  vm.runInNewContext(html.slice(start,end)+';this.loadActorRegistry=loadActorRegistry;',ctx);
+  const request=ctx.loadActorRegistry();
+  await Promise.resolve();
+  state.jwtToken='';state.authEpoch++;state.actorRequestId++;
+  elements.actorRegistryBody.innerHTML='Session cleared';
+  resolveActorQuery({ok:true,status:200,json:async()=>({data:{actors:[{name:'PRIVATE ACTOR'}]}})});
+  await request;
+  assert.equal(state.actorRows.length,0);
+  assert.doesNotMatch(elements.actorRegistryBody.innerHTML,/PRIVATE ACTOR/);
+});
