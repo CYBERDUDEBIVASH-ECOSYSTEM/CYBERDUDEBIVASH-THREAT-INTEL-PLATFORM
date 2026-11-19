@@ -607,6 +607,8 @@ def run() -> dict:
     report = {
         "version":       VERSION,
         "generated_at":  _ts(),
+        "github_run_id": os.environ.get("GITHUB_RUN_ID") if os.environ.get("GITHUB_ACTIONS") == "true" else None,
+        "github_sha": os.environ.get("GITHUB_SHA") if os.environ.get("GITHUB_ACTIONS") == "true" else None,
         "release_tier":  a13_tier,
         "feed_items":    len(items),
         "blocker_count": a13["total_blockers"],
