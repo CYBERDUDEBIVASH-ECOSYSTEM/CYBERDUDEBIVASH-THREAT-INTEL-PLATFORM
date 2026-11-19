@@ -625,7 +625,7 @@ async function authenticateKey(){
   st.textContent = 'Validating key...';
   try {
     // Exchange key for JWT
-    const r = await fetch(BASE+'/api/auth/token', {
+    const r = await fetch(BASE+'/api/auth/login', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({api_key:key})
     });
@@ -640,14 +640,14 @@ async function authenticateKey(){
       document.getElementById('clearAuthBtn').style.display='';
       document.getElementById('apiKeyInput').value='';
       document.getElementById('feedTier').textContent=tier.toUpperCase()+' Feed';
-      toast('Enterprise feed unlocked ✓');
+      toast('Authenticated feed session established');
       // Do not copy a raw long-lived credential into another DOM field.
       document.getElementById('consoleApiKey').value = '';
       refreshData();
       if(document.getElementById('panel-actors').classList.contains('active'))loadActorRegistry();
     } else {
       st.className='auth-status err';
-      st.textContent = '✗ ' + (d.message || 'Invalid key');
+      st.textContent = '✗ ' + (d.error || d.message || 'Invalid or inactive key');
       toast('Authentication failed', 'error');
     }
   } catch(e){
@@ -978,22 +978,68 @@ function exportSingle(idx){
 }
 
 // ── Export ────────────────────────────────────────────────────────────────────
-function exportData(fmt){
-  const data=STATE.filtered;
-  if(data.length===0){toast('No data to export','error');return;}
-  let blob,fn;
-  if(fmt==='json'){
-    blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-    fn='sentinel_apex_'+Date.now()+'.json';
-  } else if(fmt==='csv'){
-    const hdr='Title,Risk Score,Severity,Actor,MITRE Tactics,IOC Count,KEV,Timestamp\n';
-    const rows=data.map(e=>`"${(e.title||'').replace(/"/g,'""')}",${e.risk_score||0},"${e.severity||''}","${e.actor_tag||''}","${(e.mitre_tactics||[]).join(';')}",${e.ioc_count||0},${e.kev_present?'YES':'NO'},"${e.timestamp||''}"`).join('\n');
-    blob=new Blob([hdr+rows],{type:'text/csv'});fn='sentinel_apex_'+Date.now()+'.csv';
-  } else if(fmt==='stix'){
-    const bundle={type:'bundle',id:'bundle--sentinel-'+Date.now(),spec_version:'2.1',objects:data.slice(0,200).map((e,i)=>({type:'indicator',spec_version:'2.1',id:`indicator--${(e.id||i).toString().replace(/[^a-f0-9-]/g,'').substring(0,36)||i}`,name:e.title||'Advisory',description:e.description||'',pattern:"[ipv4-addr:value = '0.0.0.0']",pattern_type:'stix',valid_from:e.timestamp||new Date().toISOString(),confidence:Math.round(Math.min((e.risk_score||0)*10,100)),labels:(e.mitre_tactics||[]).slice(0,5)}))};
-    blob=new Blob([JSON.stringify(bundle,null,2)],{type:'application/json'});fn='sentinel_stix_2.1_'+Date.now()+'.json';
+// CSV is opened by spreadsheet software: neutralize formula prefixes from
+// third-party advisory text, including after leading spaces and control bytes.
+function csvCell(value){
+  let text=String(value==null?'':value).slice(0,2048).replace(/[\\r\\n\\t]/g,' ');
+  if(/^\\s*[=+\\-@]/.test(text))text="'"+text;
+  return '"'+text.replace(/"/g,'""')+'"';
+}
+function triggerExportDownload(data,filename,mime){
+  const blob=new Blob([data],{type:mime});
+  const href=URL.createObjectURL(blob),link=document.createElement('a');
+  link.href=href;link.download=filename;
+  link.click();
+  setTimeout(()=>URL.revokeObjectURL(href),1000);
+}
+async function exportData(fmt){
+  // This is the real paid TAXII/STIX authority. Never build dummy STIX
+  // indicators from a free preview, synthetic "0.0.0.0" patterns or
+  // internal non-UUID advisory IDs. The server decides the entitlement.
+  if(fmt==='stix'){
+    if(!STATE.jwtToken&&!STATE.apiKey){
+      toast('Sign in with an authorized API key for STIX export','error');return;
+    }
+    try{
+      const response=await fetchWithTimeout(BASE+'/taxii/collections/sentinel-apex-main/objects/',
+        {headers:authHeaders()},15000);
+      if(response.status===401||response.status===403){
+        toast('STIX export requires valid subscription access','error');return;
+      }
+      if(!response.ok)throw new Error('STIX service unavailable');
+      const bundle=await response.json();
+      const uuid=/^[a-z][a-z0-9-]*--[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if(!bundle||bundle.type!=='bundle'||!uuid.test(bundle.id)||
+          !Array.isArray(bundle.objects)||bundle.objects.length===0||
+          bundle.objects.some(x=>!x||typeof x!=='object'||!uuid.test(x.id)||
+            typeof x.type!=='string'||x.spec_version!=='2.1')){
+        throw new Error('STIX bundle failed basic structural validation');
+      }
+      triggerExportDownload(JSON.stringify(bundle,null,2),
+        'sentinel_apex_stix_'+Date.now()+'.json','application/stix+json');
+      toast('Server-issued STIX bundle downloaded');
+    }catch(e){console.warn('[ED] STIX export refused',e.message);toast('STIX bundle unavailable or invalid; no file exported','error');}
+    return;
   }
-  if(blob){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=fn;a.click();URL.revokeObjectURL(url);toast('Exported '+data.length+' items as '+fmt.toUpperCase());}
+  if(fmt!=='json'&&fmt!=='csv'){toast('Unsupported export format','error');return;}
+  const data=STATE.filtered;
+  if(!STATE.feedLoaded||!Array.isArray(data)||!data.length){
+    toast('No verified intelligence to export','error');return;
+  }
+  if(fmt==='json'){
+    triggerExportDownload(JSON.stringify(data,null,2),
+      'sentinel_apex_'+Date.now()+'.json','application/json');
+  }else{
+    const headers=['Title','Risk Score','Severity','Actor','MITRE Tactics','IOC Count','KEV','Timestamp'];
+    const rows=data.map(row=>[
+      row.title, row.risk_score, row.severity, row.actor_tag,
+      Array.isArray(row.mitre_tactics)?row.mitre_tactics.join(';'):'',
+      row.ioc_count??0, row.kev_present?'YES':'NO', row.timestamp
+    ].map(csvCell).join(','));
+    triggerExportDownload(headers.map(csvCell).join(',')+'\\r\\n'+rows.join('\\r\\n'),
+      'sentinel_apex_'+Date.now()+'.csv','text/csv;charset=utf-8');
+  }
+  toast('Exported '+data.length+' current visible items');
 }
 
 // ── Watchlists ────────────────────────────────────────────────────────────────
