@@ -1236,7 +1236,7 @@ function renderAlerts(){
   c.innerHTML=entries.slice(0,50).map((entry,index)=>{
     const a=entry&&typeof entry==='object'?entry:{};
     const score=Number(a.risk_score);
-    const validScore=Number.isFinite(score)&&score>=0&&score<=10;
+    const validScore=typeof a.risk_score==='number'&&Number.isFinite(score)&&score>=0&&score<=10;
     const severity=validScore?score:0;
     const cls=severity>=8?'':severity>=6?'sev-high':'sev-medium';
     const recorded=typeof a.timestamp==='string'&&Number.isFinite(Date.parse(a.timestamp))
