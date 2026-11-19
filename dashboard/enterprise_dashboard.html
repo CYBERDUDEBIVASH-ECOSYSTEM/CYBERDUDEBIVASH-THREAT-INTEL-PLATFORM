@@ -570,6 +570,17 @@ body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(5
 const BASE = 'https://intel.cyberdudebivash.com';
 const PAGE_SIZE = 25;
 
+// Corrupt/untrusted localStorage must never abort the enterprise dashboard.
+// Stored data is treated as presentation input, not authority or credentials.
+function safeStoredList(key,max){
+  try{
+    const raw=localStorage.getItem(key);
+    if(!raw)return null;
+    const parsed=JSON.parse(raw);
+    if(!Array.isArray(parsed))return null;
+    return parsed.filter(v=>v&&typeof v==='object'&&!Array.isArray(v)).slice(0,max);
+  }catch(_){return null;}
+}
 const STATE = {
   manifest: [],
   filtered: [],
@@ -584,13 +595,13 @@ const STATE = {
   query: '',
   apiKey: '',
   jwtToken: '',
-  alerts: JSON.parse(localStorage.getItem('cdb_alerts') || '[]'),
-  watchlists: JSON.parse(localStorage.getItem('cdb_watchlists') || 'null') || [
+  alerts: safeStoredList('cdb_alerts',200)||[],
+  watchlists: safeStoredList('cdb_watchlists',50) || [
     {id:1,name:'Critical CVEs',items:['CVE-2026','CVE-2025','zero-day'],created:new Date().toISOString()},
     {id:2,name:'APT Campaigns',items:['APT28','APT29','Lazarus','Volt Typhoon'],created:new Date().toISOString()},
     {id:3,name:'Ransomware Tracking',items:['LockBit','ALPHV','ransomware','Black Basta'],created:new Date().toISOString()},
   ],
-  savedSearches: JSON.parse(localStorage.getItem('cdb_searches') || '[]'),
+  savedSearches: safeStoredList('cdb_searches',50)||[],
   sla: null,
 };
 
@@ -1196,7 +1207,8 @@ function renderWatchlists(){
 // ── Alerts ────────────────────────────────────────────────────────────────────
 function checkWatchlistAlerts(){
   STATE.watchlists.forEach(wl=>{
-    wl.items.forEach(kw=>{
+    (Array.isArray(wl?.items)?wl.items:[]).slice(0,100).forEach(kw=>{
+      if(typeof kw!=='string'||!kw.trim())return;
       STATE.manifest.filter(e=>(e.title||'').toLowerCase().includes(kw.toLowerCase())&&(e.risk_score||0)>=6).forEach(m=>{
         const exists=STATE.alerts.find(a=>a.advisory===m.title&&a.watchlist===wl.name);
         if(!exists) STATE.alerts.unshift({id:Date.now()+Math.random(),watchlist:wl.name,advisory:m.title,risk_score:m.risk_score,timestamp:new Date().toISOString()});
@@ -1212,23 +1224,44 @@ function renderAlerts(){
   const c=document.getElementById('alertList');
   const cnt=document.getElementById('alertCount');
   const badge=document.getElementById('alertBadge');
-  cnt.textContent='('+STATE.alerts.length+')';
-  if(STATE.alerts.length>0){badge.textContent=STATE.alerts.length;badge.style.display='';}else{badge.style.display='none';}
-  if(STATE.alerts.length===0){c.innerHTML='<div class="empty-state"><div class="empty-icon">&#128276;</div><h3>No Active Alerts</h3><p>Alerts fire when live intel matches your watchlist keywords.</p></div>';return;}
-  c.innerHTML=STATE.alerts.slice(0,50).map(a=>{
-    const s=a.risk_score||0; const cls=s>=8?'':s>=6?'sev-high':'sev-medium';
-    return `<div class="alert-card ${cls}">
-      <div class="alert-time">${new Date(a.timestamp).toLocaleDateString()}</div>
-      <div class="alert-body">
-        <div class="alert-title">${esc((a.advisory||'').substring(0,80))}</div>
-        <div class="alert-desc">Watchlist: ${esc(a.watchlist)} &nbsp;|&nbsp; Risk: ${s}</div>
-      </div>
-      ${riskBadge(s)}
-      <button class="btn btn-xs" onclick="dismissAlert('${a.id}')">&#215;</button>
-    </div>`;
+  const entries=Array.isArray(STATE.alerts)?STATE.alerts:[];
+  cnt.textContent='('+entries.length+')';
+  badge.textContent=entries.length||'';
+  badge.style.display=entries.length?'':'none';
+  if(!entries.length){
+    c.innerHTML='<div class="empty-state"><div class="empty-icon">&#128276;</div><h3>No Saved Alerts</h3><p>Alerts are calculated from the most recently verified feed; this is not continuous background monitoring.</p></div>';
+    c.onclick=null;
+    return;
+  }
+  c.innerHTML=entries.slice(0,50).map((entry,index)=>{
+    const a=entry&&typeof entry==='object'?entry:{};
+    const score=Number(a.risk_score);
+    const validScore=Number.isFinite(score)&&score>=0&&score<=10;
+    const severity=validScore?score:0;
+    const cls=severity>=8?'':severity>=6?'sev-high':'sev-medium';
+    const recorded=typeof a.timestamp==='string'&&Number.isFinite(Date.parse(a.timestamp))
+      ?new Date(a.timestamp).toLocaleDateString():'Date not recorded';
+    const title=typeof a.advisory==='string'?a.advisory.slice(0,160):'Advisory';
+    const watch=typeof a.watchlist==='string'?a.watchlist.slice(0,100):'Unknown watchlist';
+    return '<div class="alert-card '+cls+'">'+
+      '<div class="alert-time">'+esc(recorded)+'</div>'+
+      '<div class="alert-body"><div class="alert-title">'+esc(title)+'</div>'+
+      '<div class="alert-desc">Watchlist: '+esc(watch)+' | Risk: '+(validScore?score.toFixed(1):'Not measured')+'</div></div>'+
+      (validScore?riskBadge(score):'<span class="risk-badge">Not measured</span>')+
+      '<button type="button" class="btn btn-xs" data-alert-dismiss="'+index+'" aria-label="Dismiss saved alert">&#215;</button></div>';
   }).join('');
+  // Untrusted stored IDs must never be concatenated into an onclick string.
+  c.onclick=function(ev){
+    const target=ev.target&&typeof ev.target.closest==='function'
+      ?ev.target.closest('[data-alert-dismiss]'):null;
+    if(!target)return;
+    const raw=target.getAttribute('data-alert-dismiss');
+    if(typeof raw!=='string'||!/^(0|[1-9][0-9]{0,2})$/.test(raw))return;
+    const index=Number(raw);
+    if(!Number.isSafeInteger(index)||index<0||index>=Math.min(entries.length,50))return;
+    dismissAlert(entries[index].id);
+  };
 }
-
 function dismissAlert(id){STATE.alerts=STATE.alerts.filter(a=>String(a.id)!==String(id));localStorage.setItem('cdb_alerts',JSON.stringify(STATE.alerts));renderAlerts();}
 function clearAlerts(){STATE.alerts=[];localStorage.setItem('cdb_alerts','[]');renderAlerts();toast('Alerts cleared');}
 
