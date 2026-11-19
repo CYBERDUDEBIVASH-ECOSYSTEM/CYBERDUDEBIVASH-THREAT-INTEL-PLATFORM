@@ -308,3 +308,44 @@ test('SLA component fields are escaped and invalid uptime is not certified',()=>
   assert.match(block,/c\.uptime<=100/);
   assert.doesNotMatch(block,/\$\{name\}/);
 });
+
+
+test('malformed localStorage and non-array persistence cannot prevent dashboard boot',()=>{
+  const start=html.indexOf('function safeStoredList(key,max){');
+  const end=html.indexOf('const STATE = {',start);
+  assert.ok(start>=0&&end>start);
+  const db={bad:'{broken',object:'{"unexpected":"shape"}',
+    good:'[{"id":1},{"id":2},{"id":3}]'};
+  const ctx={localStorage:{getItem:k=>db[k]||null}};
+  vm.runInNewContext(html.slice(start,end)+'this.safeStoredList=safeStoredList;',ctx);
+  assert.equal(ctx.safeStoredList('bad',10),null);
+  assert.equal(ctx.safeStoredList('object',10),null);
+  assert.equal(ctx.safeStoredList('good',2).length,2);
+  ctx.localStorage={getItem:()=>{throw new Error('Storage denied')}};
+  assert.equal(ctx.safeStoredList('good',2),null);
+});
+test('stored alerts cannot inject inline JavaScript or fabricated risk scores',()=>{
+  const begin=html.indexOf('function renderAlerts(){');
+  const end=html.indexOf('function dismissAlert(id){',begin);
+  assert.ok(begin>=0&&end>begin);
+  const alertId="');alert('EXECUTE_ME');//";
+  const records=[{id:alertId,advisory:'<img src=x onerror=alert(3)>',
+    watchlist:'<svg onload=alert(1)>',risk_score:'9',timestamp:'garbled'}];
+  const widgets={alertList:{innerHTML:'',onclick:null},
+    alertCount:{textContent:''},alertBadge:{textContent:'',style:{display:''}}};
+  let dismissed=null;
+  const ctx={STATE:{alerts:records},
+    document:{getElementById:id=>widgets[id]},
+    esc:x=>String(x??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'),
+    riskBadge:x=>'<span>'+x+'</span>',dismissAlert:id=>{dismissed=id}};
+  vm.runInNewContext(html.slice(begin,end)+'this.renderAlerts=renderAlerts;',ctx);
+  ctx.renderAlerts();
+  const out=widgets.alertList.innerHTML;
+  assert.doesNotMatch(out,/onclick=|onerror=|<img|<svg/i);
+  assert.doesNotMatch(out,/EXECUTE_ME/);
+  assert.match(out,/&lt;img/);
+  assert.match(out,/Not measured/);
+  assert.match(out,/data-alert-dismiss="0"/);
+  widgets.alertList.onclick({target:{closest:()=>({getAttribute:()=> '0'})}});
+  assert.equal(dismissed,alertId);
+});
