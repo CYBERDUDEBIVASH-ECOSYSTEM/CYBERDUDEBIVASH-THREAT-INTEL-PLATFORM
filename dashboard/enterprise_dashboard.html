@@ -1111,17 +1111,33 @@ function saveCurrentSearch(){
 
 function renderSavedSearches(){
   const c=document.getElementById('ssContainer');
-  if(STATE.savedSearches.length===0){c.innerHTML='<div class="empty-state"><div class="empty-icon">&#128269;</div><h3>No Saved Searches</h3></div>';return;}
-  c.innerHTML=STATE.savedSearches.map(s=>`
-    <div class="ss-item" onclick="loadSearch('${esc(s.query)}','${s.filter}')">
-      <div>
-        <div class="ss-query">${esc(s.query)}</div>
-        <div class="ss-meta">Filter: ${s.filter} &nbsp;|&nbsp; ${s.results} results &nbsp;|&nbsp; ${new Date(s.saved).toLocaleDateString()}</div>
-      </div>
-      <button class="btn btn-xs btn-danger" onclick="event.stopPropagation();deleteSearch(${s.id})">&#215;</button>
-    </div>`).join('');
+  if(STATE.savedSearches.length===0){
+    c.innerHTML='<div class="empty-state"><h3>No Saved Searches</h3></div>';
+    c.onclick=null;return;
+  }
+  // Do not inject user-supplied search text into JavaScript/onclick attributes.
+  // Event delegation resolves a bounded numeric index into state after a click.
+  c.innerHTML=STATE.savedSearches.slice(0,50).map((row,index)=>{
+    const query=typeof row.query==='string'?row.query.slice(0,240):'';
+    const filter=typeof row.filter==='string'?row.filter.slice(0,40):'all';
+    const count=Number.isSafeInteger(row.results)&&row.results>=0?String(row.results):'—';
+    const stamp=typeof row.saved==='string'&&!isNaN(Date.parse(row.saved))?new Date(row.saved).toLocaleDateString():'Unknown';
+    return '<div class="ss-item" data-search-index="'+index+'">'+
+      '<div><div class="ss-query">'+esc(query)+'</div>'+
+      '<div class="ss-meta">Filter: '+esc(filter)+' | '+count+' results | '+esc(stamp)+'</div></div>'+
+      '<button class="btn btn-xs btn-danger" data-delete-search-index="'+index+'" type="button">&#215;</button></div>';
+  }).join('');
+  c.onclick=function(ev){
+    if(!ev.target||typeof ev.target.closest!=='function')return;
+    const del=ev.target.closest('[data-delete-search-index]');
+    const row=ev.target.closest('[data-search-index]');
+    const ix=Number((del||row)?.getAttribute(del?'data-delete-search-index':'data-search-index'));
+    if(!Number.isSafeInteger(ix)||ix<0||ix>=STATE.savedSearches.length)return;
+    const item=STATE.savedSearches[ix];
+    if(del){ev.stopPropagation();deleteSearch(item.id);}
+    else if(row&&typeof item.query==='string')loadSearch(item.query,typeof item.filter==='string'?item.filter:'all');
+  };
 }
-
 function loadSearch(q,f){
   document.getElementById('searchInput').value=q;
   STATE.query=q.toLowerCase(); STATE.filter=f||'all'; STATE.page=1;
