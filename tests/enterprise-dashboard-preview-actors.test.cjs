@@ -349,3 +349,32 @@ test('stored alerts cannot inject inline JavaScript or fabricated risk scores',(
   widgets.alertList.onclick({target:{closest:()=>({getAttribute:()=> '0'})}});
   assert.equal(dismissed,alertId);
 });
+
+
+test('severity filters and KPI classification follow authoritative published labels',()=>{
+  const begin=html.indexOf('function severityBucket(e){');
+  const end=html.indexOf('function updateMetrics(){',begin);
+  assert.ok(begin>=0&&end>begin);
+  const ctx={};
+  vm.runInNewContext(html.slice(begin,end)+'this.severityBucket=severityBucket;',ctx);
+  const items=[
+    {title:'critical but low score',severity:'CRITICAL',risk_score:5.0947},
+    {title:'high but high score',severity:'HIGH',risk_score:9.8},
+    {title:'medium low score',severity:'MEDIUM',risk_score:0.5},
+    {title:'low',severity:'LOW',risk_score:2.5},
+  ];
+  assert.deepEqual(items.map(ctx.severityBucket).join(','),'critical,high,medium,low');
+  assert.equal(ctx.severityBucket({severity:'',risk_score:null}),'unknown');
+  assert.equal(ctx.severityBucket({severity:'',risk_score:9}),'critical');
+  const from=html.indexOf('function applyFilters(){');
+  const to=html.indexOf('// ── Drawer ──',from);
+  assert.ok(from>=0&&to>from);
+  let redraws=0;
+  const state={manifest:items,filtered:[],filter:'high',query:''};
+  vm.runInNewContext(html.slice(from,to)+'this.applyFilters=applyFilters;',
+    Object.assign(ctx,{STATE:state,renderTable:()=>{redraws++}}));
+  ctx.applyFilters();
+  assert.equal(redraws,1);
+  assert.equal(state.filtered.length,1);
+  assert.equal(state.filtered[0].title,'high but high score');
+});
