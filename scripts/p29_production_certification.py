@@ -31,6 +31,7 @@ Outputs: data/quality/p29_certification_report.json
 """
 
 from __future__ import annotations
+from p26_certification_guard import validate_p26_worldwide_report
 import json, os, pathlib, re, sys
 
 from p38_shared_validators import (
@@ -171,10 +172,9 @@ def g11_p27_certification(items):
 
 def g12_p26_certification(items):
     d = _load_quality_report("p26_certification_report.json")
-    if not d: return _make_gate("G12", "P26 Certification", False, "p26_certification_report.json not found", "BLOCKER")
-    ok = d.get("release_tier","") != "REJECTED"
-    return _make_gate("G12", "P26 Certification", ok,
-                      f"P26 tier={d.get('release_tier','?')} blockers={d.get('blocker_count',0)}")
+    ok, reason = validate_p26_worldwide_report(d, expected_items=len(items))
+    return _make_gate("G12", "P26 Current-Run Worldwide Certification", ok, reason, "BLOCKER")
+
 
 def g13_p25_trust_gate(items):
     d = _load_quality_report("p25_enterprise_trust_gate.json")
