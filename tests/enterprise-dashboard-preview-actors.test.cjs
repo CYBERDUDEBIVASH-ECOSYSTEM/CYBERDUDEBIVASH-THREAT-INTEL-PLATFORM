@@ -96,3 +96,85 @@ test('live preview loads nested results and API failure clears stale previously 
   assert.equal(hidden,1);
   assert.equal(metricUpdates,1,'unavailable feed must not rewrite zero into numeric KPIs');
 });
+
+
+test('gateway login contract uses implemented /api/auth/login, not missing /api/auth/token',()=>{
+  const begin=html.indexOf('async function authenticateKey(){');
+  const end=html.indexOf('function clearAuth(){',begin);
+  assert.ok(begin>=0&&end>begin);
+  const code=html.slice(begin,end);
+  assert.match(code,/fetch\(BASE\+'\/api\/auth\/login'/);
+  assert.doesNotMatch(code,/\/api\/auth\/token/);
+  assert.match(code,/STATE\.jwtToken = d\.token/);
+});
+test('paid STIX export is server-issued from authenticated TAXII collection only',async()=>{
+  const start=html.indexOf('function csvCell(value){');
+  const end=html.indexOf('// ── Watchlists ──',start);
+  assert.ok(start>=0&&end>start);
+  const section=html.slice(start,end);
+  assert.doesNotMatch(section,/\[ipv4-addr:value = '0\.0\.0\.0'\]/);
+  const files=[],alerts=[],requests=[];
+  const payload={type:'bundle',spec_version:'2.1',
+    id:'bundle--22e6b438-3d3f-4ea0-8dba-61a9e043e148',
+    objects:[{type:'indicator',spec_version:'2.1',id:'indicator--22e6b438-3d3f-4ea0-8dba-61a9e043e148'}]};
+  const ctx={
+    STATE:{apiKey:'',jwtToken:'',filtered:[{title:'test'}],feedLoaded:true},
+    document:{createElement:()=>({click(){}})},
+    BASE:'https://intel.cyberdudebivash.com',
+    fetchWithTimeout:async(...args)=>{requests.push(args);return {ok:true,status:200,json:async()=>payload}},
+    authHeaders:()=>({Authorization:'Bearer fixture'}),
+    toast:(message,kind)=>alerts.push({message,kind}),
+    URL:{createObjectURL:blob=>{files.push(blob);return 'blob:fixture'},revokeObjectURL:()=>{}},
+    Blob:class {constructor(data,opts){this.data=data;this.opts=opts}},
+    setTimeout:()=>0,console:{warn:()=>{}}
+  };
+  vm.runInNewContext(section+';this.exportData=exportData;',ctx);
+  await ctx.exportData('stix');
+  assert.equal(files.length,0,'no anonymous STIX file should be generated');
+  assert.equal(requests.length,0,'anonymous requests should not hit paid TAXII');
+  ctx.STATE.jwtToken='signed';
+  await ctx.exportData('stix');
+  assert.equal(requests.length,1);
+  assert.ok(requests[0][0].endsWith('/taxii/collections/sentinel-apex-main/objects/'));
+  assert.equal(requests[0][1].headers.Authorization,'Bearer fixture');
+  assert.equal(files.length,1);
+  assert.equal(JSON.parse(files[0].data[0]).objects.length,1);
+  ctx.fetchWithTimeout=async()=>({ok:false,status:403});
+  await ctx.exportData('stix');
+  assert.equal(files.length,1,'403 must not emit a file');
+  ctx.fetchWithTimeout=async()=>({ok:true,status:200,json:async()=>({...payload,objects:[{id:'indicator--invalid',type:'indicator',spec_version:'2.1'}]})});
+  await ctx.exportData('stix');
+  assert.equal(files.length,1,'invalid server STIX must not emit a file');
+});
+test('untrusted third-party advisories never trigger CSV formulas or incorrect record separators',()=>{
+  const start=html.indexOf('function csvCell(value){');
+  const end=html.indexOf('function triggerExportDownload(',start);
+  assert.ok(start>=0&&end>start);
+  const ctx={};
+  vm.runInNewContext(html.slice(start,end)+';this.csvCell=csvCell;',ctx);
+  for(const dangerous of ['=SUM(1,2)','+cmd','-2+3','@IMPORTXML','   =SUM(2,4)'])
+    assert.ok(ctx.csvCell(dangerous).startsWith('"'+String.fromCharCode(39)));
+  assert.equal(ctx.csvCell('Safe advisory'),'"Safe advisory"');
+  assert.equal(ctx.csvCell('one\n=2'),'\"one =2\"');
+  assert.match(html,/rows\.join\('\\r\\n'\)/,'CSV records must use actual CRLF delimiters');
+});
+test('watchlist items never enter inline event handlers, and dangerous text stays escaped',()=>{
+  const start=html.indexOf('function renderWatchlists(){');
+  const end=html.indexOf('// ── Alerts ──',start);
+  assert.ok(start>=0&&end>start);
+  const widget={innerHTML:'',onclick:null,onkeydown:null};
+  const payload="');alert('IOC_XSS');//";
+  const state={watchlists:[{id:123,name:'<img src=x onerror=alert(1)>',
+    created:'2026-11-19T00:00:00Z',items:[payload]}]};
+  const ctx={STATE:state,document:{getElementById:()=>widget},
+    esc:value=>String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'),
+    addWatchlistItem:()=>{},removeWatchlistItem:()=>{},deleteWatchlist:()=>{}};
+  vm.runInNewContext(html.slice(start,end)+';this.renderWatchlists=renderWatchlists;',ctx);
+  ctx.renderWatchlists();
+  assert.doesNotMatch(widget.innerHTML,/onclick=|onkeydown=/i);
+  assert.doesNotMatch(widget.innerHTML,/<img/i);
+  assert.match(widget.innerHTML,/&lt;img/);
+  assert.ok(widget.innerHTML.includes("');alert('IOC_XSS');//"));
+  assert.equal(typeof widget.onclick,'function');
+  assert.equal(typeof widget.onkeydown,'function');
+});
