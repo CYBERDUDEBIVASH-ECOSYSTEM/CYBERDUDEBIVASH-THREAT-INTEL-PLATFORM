@@ -244,7 +244,7 @@ def _item_cves(feed_item: Dict[str, Any]) -> List[str]:
 # The dossier's _load_cvss_fallback_index() deliberately uses the *first*
 # feed row with CVSS or EPSS metadata for a given CVE.  Preserve those exact
 # semantics here: a missing CVSS is NOT a license to infer one from APEX risk.
-_CVE_RENDERER_RE = re.compile(r"CVE-\\d{4}-\\d{4,}", re.IGNORECASE)
+_CVE_RENDERER_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.IGNORECASE)
 
 
 def _renderer_cve_ids(item: Dict[str, Any]) -> List[str]:
