@@ -178,6 +178,14 @@ jobs:
       - name: "P0 persisted certification replay negative controls (offline)"
         run: node --test tests/certification-registry-replay.test.mjs
 
+      # P0 customer incidents #1040: validate read-only/public preview, API-key
+      # scope boundaries, server-issued STIX, CSV formula hardening, XSS
+      # prevention, reviewed Bug Hunter scan provenance, and historical labels.
+      # In-memory fixtures only: no deployment, credential, R2 or API writes.
+      - name: "P0 enterprise dashboard and reviewed recon regression (offline)"
+        run: |
+          node --test tests/enterprise-dashboard-preview-actors.test.cjs tests/bughunter-published-evidence-contract.test.cjs
+
       - name: "Homepage AI assessment presentation regressions"
         run: node --test tests/ai-assessment-presentation.test.cjs tests/latest-advisory-ticker.test.cjs tests/live-feed-ioc-counter.test.cjs tests/recon-evidence-presentation.test.cjs tests/tipsoar-rendering-security.test.cjs tests/ai-analysis-rendering-security.test.cjs tests/sovereign-feed-evidence.test.cjs tests/cortex-relationship-evidence.test.cjs tests/quantum-source-evidence.test.cjs
 
