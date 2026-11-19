@@ -41,3 +41,22 @@ test('empty and malformed findings produce different operational states',()=>{
  render({metrics:{},findings_summary:[null,4,'bad',{}]});
  assert.ok(nodes['bh-findings-feed'].innerHTML.includes('UNCLASSIFIED'));
 });
+
+
+test('historical Bug Hunter observations remain visible but not live scan metrics',()=>{
+  const {nodes,render}=renderer();
+  render({
+    status:'COMPLETED',domain:'example.test',timestamp:'2026-08-25T12:34:00Z',
+    metrics:{subdomains:8,live_hosts:7,api_endpoints:16,total_findings:2,critical_findings:0},
+    findings_summary:[{severity:'MEDIUM',type:'MISSING_SECURITY_HEADERS',target:'https://example.test'}]
+  });
+  const html=nodes['bh-findings-feed'].innerHTML;
+  assert.ok(html.includes('HISTORICAL SCAN (2026-08-25) — NOT CURRENT'));
+  assert.ok(html.includes('8 subdomain candidates'));
+  assert.ok(html.includes('7 reachable hosts'));
+  assert.ok(html.includes('16 API path observations'));
+  assert.ok(html.includes('2 findings'));
+  assert.equal(nodes['bh-subdomain-count'].textContent,'Re-scan required');
+  assert.equal(nodes['bh-livehost-count'].textContent,'Re-scan required');
+  assert.ok(html.includes('MISSING_SECURITY_HEADERS'));
+});
