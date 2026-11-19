@@ -575,6 +575,10 @@ const STATE = {
   filtered: [],
   feedLoaded: false,
   actorRows: [],
+  authEpoch: 0,
+  authAttemptId: 0,
+  feedRequestId: 0,
+  actorRequestId: 0,
   page: 1,
   filter: 'all',
   query: '',
@@ -618,6 +622,7 @@ function onKeyInput(){
 }
 
 async function authenticateKey(){
+  const attempt=++STATE.authAttemptId;
   const key = document.getElementById('apiKeyInput').value.trim();
   if (!key) { toast('Enter an API key first', 'error'); return; }
   const st = document.getElementById('authStatus');
@@ -630,7 +635,9 @@ async function authenticateKey(){
       body:JSON.stringify({api_key:key})
     },10000);
     const d = await r.json();
+    if(attempt!==STATE.authAttemptId)return;
     if(r.ok && d.token){
+      STATE.authEpoch++;
       STATE.apiKey = key;
       STATE.jwtToken = d.token;
       // Credentials remain memory-only; reload/navigation requires re-authentication.
@@ -651,6 +658,7 @@ async function authenticateKey(){
       toast('Authentication failed', 'error');
     }
   } catch(e){
+    if(attempt!==STATE.authAttemptId)return;
     st.className='auth-status err';
     st.textContent = '✗ Network error: '+e.message;
     toast('Network error', 'error');
@@ -658,6 +666,12 @@ async function authenticateKey(){
 }
 
 function clearAuth(){
+  // Late authorized API responses and in-flight logins are not allowed to
+  // repopulate paid data after customer logout.
+  STATE.authAttemptId++;
+  STATE.authEpoch++;
+  STATE.feedRequestId++;
+  STATE.actorRequestId++;
   STATE.apiKey = ''; STATE.jwtToken = '';
   STATE.actorRows=[];
   document.getElementById('actorRegistryStatus').textContent='Authenticate to view source-attributed actor records.';
@@ -678,6 +692,10 @@ function authHeaders(){
 
 // Paid actor registry; never expose profiles or keys on unauthorized requests.
 async function loadActorRegistry(){
+  const epoch=STATE.authEpoch||0;
+  const requestId=STATE.actorRequestId=(STATE.actorRequestId||0)+1;
+  const isCurrent=()=>epoch===(STATE.authEpoch||0)&&requestId===STATE.actorRequestId;
+  STATE.actorRows=[];
   const status=document.getElementById('actorRegistryStatus'),body=document.getElementById('actorRegistryBody');
   if(!STATE.jwtToken&&!STATE.apiKey){
     status.textContent='An authorized key with read:actors scope is required.';
@@ -688,12 +706,14 @@ async function loadActorRegistry(){
   body.innerHTML='<tr><td colspan="4">Loading…</td></tr>';
   try{
     const resp=await fetchWithTimeout(BASE+'/api/actors?limit=200',{headers:authHeaders()},12000);
+    if(!isCurrent())return;
     if(resp.status===401||resp.status===403){
       status.textContent='Actor registry access denied: key lacks read:actors scope.';
       body.innerHTML='<tr><td colspan="4">Contact support for authorized actor access.</td></tr>';return;
     }
     if(!resp.ok)throw new Error('HTTP '+resp.status);
     const data=await resp.json();
+    if(!isCurrent())return;
     if(!Array.isArray(data?.data?.actors))throw new Error('Invalid actor registry response');
     const actors=data.data.actors.filter(x=>x&&typeof x.name==='string').slice(0,200);
     STATE.actorRows=actors;
@@ -702,6 +722,7 @@ async function loadActorRegistry(){
       '</td><td>'+esc(x.last_seen||'Not reported')+'</td><td>'+esc(x.ttp_count??'Not reported')+'</td></tr>').join(''):
       '<tr><td colspan="4">No source-attributed actor records available in the current registry.</td></tr>';
   }catch(e){
+    if(!isCurrent())return;
     status.textContent='Actor registry unavailable; no profiles displayed.';
     body.innerHTML='<tr><td colspan="4">Retry after API recovery.</td></tr>';
   }
@@ -742,6 +763,9 @@ async function fetchWithTimeout(url, opts, ms){
 }
 
 async function loadManifest(){
+  const epoch=STATE.authEpoch||0;
+  const requestId=STATE.feedRequestId=(STATE.feedRequestId||0)+1;
+  const isCurrent=()=>epoch===(STATE.authEpoch||0)&&requestId===STATE.feedRequestId;
   setLoading(true);
   const hasAuth=!!(STATE.jwtToken||STATE.apiKey);
   // Never substitute stale GitHub artifacts for live current public intel.
@@ -755,8 +779,10 @@ async function loadManifest(){
   for(const src of SOURCES){
     try{
       const resp=await fetchWithTimeout(src.url,src.opts,src.ms);
+      if(!isCurrent())return;
       if(!resp.ok){error=src.label+' HTTP '+resp.status;continue;}
       const data=await resp.json();
+      if(!isCurrent())return;
       if(!data||typeof data!=='object'||data.status==='unhealthy'||data.status==='error'){error='Invalid live response';continue;}
       const items=parseManifest(data).filter(item=>item&&typeof item==='object'&&!Array.isArray(item));
       if(!items.length){error=src.label+' returned no current advisories';continue;}
@@ -773,6 +799,7 @@ async function loadManifest(){
       break;
     }catch(e){error=src.label+' request failed';console.warn('[ED] Feed request failure',e.message);}
   }
+  if(!isCurrent())return;
   if(!STATE.feedLoaded){
     STATE.manifest=[];
     document.getElementById('feedSource').textContent=error;
