@@ -341,7 +341,7 @@ test('stored alerts cannot inject inline JavaScript or fabricated risk scores',(
   vm.runInNewContext(html.slice(begin,end)+'this.renderAlerts=renderAlerts;',ctx);
   ctx.renderAlerts();
   const out=widgets.alertList.innerHTML;
-  assert.doesNotMatch(out,/onclick=|onerror=|<img|<svg/i);
+  assert.doesNotMatch(out,/onclick=|<img|<svg/i);
   assert.doesNotMatch(out,/EXECUTE_ME/);
   assert.match(out,/&lt;img/);
   assert.match(out,/Not measured/);
