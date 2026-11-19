@@ -1312,7 +1312,7 @@ async function loadSLA(){
       if(d.credit_policy||d.sla_met_enterprise!==undefined){
         document.getElementById('slaCreditPolicy').style.display='';
         document.getElementById('slaCreditText').innerHTML=
-          `Enterprise SLA Target: <strong>${Number.isFinite(d.sla_target_enterprise)?d.sla_target_enterprise.toFixed(2):'Not specified'}%</strong> &nbsp;|&nbsp; 
+          `Enterprise SLA Target: <strong>${Number.isFinite(d.sla_target_enterprise)?d.sla_target_enterprise.toFixed(2)+'%':'Not specified'}</strong> &nbsp;|&nbsp; 
            Status: <strong style="color:${d.sla_met_enterprise===true?'var(--green)':d.sla_met_enterprise===false?'var(--critical)':'var(--text-dim)'}">${d.sla_met_enterprise===true?'MET ✓':d.sla_met_enterprise===false?'BREACHED ✗':'NOT YET MEASURED'}</strong><br>
            Credit Policy: 10% per day of breach, up to 30% of monthly fee. Contact <a href="mailto:contact@cyberdudebivash.in" style="color:var(--accent)">contact@cyberdudebivash.in</a> with this report to claim.`;
       }
