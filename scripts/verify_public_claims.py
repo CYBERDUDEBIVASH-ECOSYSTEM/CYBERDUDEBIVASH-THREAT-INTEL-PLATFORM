@@ -236,6 +236,20 @@ def main() -> int:
             "roi-calculator.html labels its output as a projection/estimate, not an achieved result",
         )
 
+    # P0 buyer-trust guard: unsupported production claims must not recur.
+    index_path = REPO_ROOT / "index.html"
+    if index_path.exists():
+        visible_copy = " ".join(text_nodes(index_path.read_text(encoding="utf-8", errors="ignore")))
+        for unsupported_claim in (
+            r"Rollback-safe deployment with a tested rollback target",
+            r"predictive risk scoring across your entire attack surface",
+            r"AI-driven autonomous security response, incident correlation, and self-healing architecture hardened against zero-day vectors",
+        ):
+            check(
+                re.search(unsupported_claim, visible_copy, re.IGNORECASE) is None,
+                f"index.html does not claim unsupported delivery: {unsupported_claim}",
+            )
+
     print()
     print(f"verify_public_claims.py: {CHECK_COUNT} checks, {len(FAILURES)} failed.")
     if FAILURES:
