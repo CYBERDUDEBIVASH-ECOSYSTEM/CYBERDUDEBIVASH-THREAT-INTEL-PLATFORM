@@ -24,6 +24,7 @@ Gate list (14 gates):
 """
 
 from __future__ import annotations
+from p26_certification_guard import validate_p26_worldwide_report
 import json, os, pathlib, re, sys
 
 from p38_shared_validators import get_certification_feed, has_mitre_coverage, StaleFeedError
@@ -254,22 +255,19 @@ def g09_html_report_files(items: list) -> dict:
             "severity": "BLOCKER" if count == 0 else ("WARNING" if not ok else "OK")}
 
 def g10_p26_certification(items: list) -> dict:
-    p26_file = _QUAL / "p26_certification_report.json"
-    if not p26_file.exists():
-        return {"gate": "G10", "name": "P26 Certification", "pass": False,
-                "detail": "p26_certification_report.json not found",
-                "severity": "BLOCKER"}
+    d = _load_json_p26_current_run()
+    ok, reason = validate_p26_worldwide_report(d, expected_items=len(items))
+    return {"gate": "G10", "name": "P26 Current-Run Worldwide Certification",
+            "pass": ok, "detail": reason,
+            "severity": "BLOCKER" if not ok else "OK"}
+
+
+def _load_json_p26_current_run():
     try:
-        d = json.loads(p26_file.read_bytes())
-        tier = d.get("release_tier", "UNKNOWN")
-        blockers = d.get("blocker_count", 99)
-        ok = tier != "REJECTED"
-        return {"gate": "G10", "name": "P26 Certification", "pass": ok,
-                "detail": f"P26 tier={tier} blockers={blockers}",
-                "severity": "BLOCKER" if not ok else "OK"}
-    except Exception as e:
-        return {"gate": "G10", "name": "P26 Certification", "pass": False,
-                "detail": str(e), "severity": "BLOCKER"}
+        return json.loads((_QUAL / "p26_certification_report.json").read_bytes())
+    except (OSError, ValueError):
+        return None
+
 
 def g11_p25_trust_gate(items: list) -> dict:
     p25_file = _QUAL / "p25_enterprise_trust_gate.json"
