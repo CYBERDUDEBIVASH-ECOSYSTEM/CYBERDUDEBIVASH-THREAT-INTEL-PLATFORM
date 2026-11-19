@@ -212,6 +212,47 @@ class TestBuildReportsIndexArtifactFallback(unittest.TestCase):
         # APEX 3/10 remains a separate score: CVSS is not inferred from it.
         self.assertEqual(entry["risk_score"], 3.0)
 
+    def test_catalog_dossier_same_cve_fallback_cvss_parity(self):
+        """The report renderer already reads same-CVE feed CVSS evidence.
+
+        The catalog must use identical fallback semantics, not mislabel the
+        dossier's real CRITICAL classification as UNRATED.
+        """
+        primary = "intel--a97aa98bb87cc76d"
+        corroborating = "intel--a97aa98bb87cc76e"
+        self._write_report(
+            primary, _report_html("CVE-2099-00009 vendor RCE", "CRITICAL", 9.4)
+        )
+        self._write_feed([
+            {"id": primary, "timestamp": _recent_ts(),
+             "title": "CVE-2099-00009 vendor RCE", "severity": "LOW"},
+            {"id": corroborating, "timestamp": _recent_ts(),
+             "title": "CVE-2099-00009 vendor technical bulletin",
+             "cvss_score": 9.4, "severity": "CRITICAL"},
+        ])
+        entry = self._entry(self._run(), primary)
+        self.assertEqual(entry["severity"], "CRITICAL")
+        self.assertEqual(entry["severity_basis"], "cvss_reported")
+
+    def test_epss_only_first_same_cve_fallback_does_not_invent_cvss(self):
+        """Mirror the renderer's first matching EPSS-only fallback precisely."""
+        primary = "intel--d31dd42ee53ff64a"
+        epss_only = "intel--d31dd42ee53ff64b"
+        later_scored = "intel--d31dd42ee53ff64c"
+        self._write_report(primary, _report_html("CVE-2099-00010 advisory", "LOW", 2.0))
+        self._write_feed([
+            {"id": primary, "timestamp": _recent_ts(),
+             "title": "CVE-2099-00010 advisory", "severity": "LOW"},
+            {"id": epss_only, "timestamp": _recent_ts(),
+             "title": "CVE-2099-00010 EPSS bulletin", "epss_score": 0.02},
+            {"id": later_scored, "timestamp": _recent_ts(),
+             "title": "CVE-2099-00010 later scored",
+             "cvss_score": 9.4},
+        ])
+        entry = self._entry(self._run(), primary)
+        self.assertEqual(entry["severity"], "UNRATED")
+        self.assertEqual(entry["severity_basis"], "none")
+
     # 5/8. Missing canonical record + genuinely unknown severity/risk -> honest state, no fabrication.
     def test_missing_severity_stays_honestly_unknown_not_fabricated(self):
         html = ("<!doctype html><html><head>"
