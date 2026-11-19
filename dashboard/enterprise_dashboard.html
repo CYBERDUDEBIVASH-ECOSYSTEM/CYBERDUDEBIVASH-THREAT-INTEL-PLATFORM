@@ -920,11 +920,14 @@ function renderTable(){
     const published=e.published_at||e.published||e.timestamp;
     const ts=published&&Number.isFinite(Date.parse(published))?new Date(published).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'—';
     const actor=e.actor_tag||'Unattributed';
-    const tactics=(e.mitre_tactics||[]).slice(0,2).map(t=>`<span class="tag tag-mitre">${esc(t)}</span>`).join('');
+    const tactics=(Array.isArray(e.mitre_tactics)?e.mitre_tactics:[]).slice(0,2).map(t=>`<span class="tag tag-mitre">${esc(t)}</span>`).join('');
     let iocCount=e.ioc_count||0;
     if(!iocCount){const c=e.ioc_counts||{};Object.values(c).forEach(v=>{iocCount+=typeof v==='number'?v:0;});}
     const kev=e.kev_present?'<span class="tag tag-kev">KEV</span>':'—';
-    const cves=(e.iocs?.cve||e.iocs?.cves||[]).slice(0,1).map(v=>`<span class="tag tag-cve">${esc(v)}</span>`).join('');
+    const cveCandidates=Array.isArray(e.cve_ids)?e.cve_ids:
+      Array.isArray(e.iocs?.cve)?e.iocs.cve:Array.isArray(e.iocs?.cves)?e.iocs.cves:
+      typeof e.cve_id==='string'?[e.cve_id]:[];
+    const cves=cveCandidates.slice(0,1).map(v=>`<span class="tag tag-cve">${esc(String(v).slice(0,32))}</span>`).join('');
     return `<tr onclick="openDrawer(${(STATE.page-1)*PAGE_SIZE+i})">
       <td><div class="advisory-title">${esc(title)}</div><div class="advisory-meta">${ts} &nbsp;${cves}</div></td>
       <td>${riskBadge(e.risk_score)}</td>
@@ -989,7 +992,7 @@ function openDrawer(idx){
     iocRows='<div style="color:var(--text-dim);font-size:.83em;padding:8px">IOC details require Pro/Enterprise access. <a href="../upgrade.html" style="color:var(--accent)">Upgrade</a></div>';
   }
 
-  const tactics=(e.mitre_tactics||[]).map(t=>`<span class="tag tag-mitre">${esc(t)}</span>`).join(' ');
+  const tactics=(Array.isArray(e.mitre_tactics)?e.mitre_tactics:[]).slice(0,30).map(t=>`<span class="tag tag-mitre">${esc(t)}</span>`).join(' ');
   document.getElementById('drawerBody').innerHTML=`
     <div class="drawer-section">
       <h4>Risk Score</h4>
@@ -1011,7 +1014,7 @@ function openDrawer(idx){
     <div class="drawer-section">
       <h4>Metadata</h4>
       <div class="val">ID: ${esc(e.id||'—')}</div>
-      <div class="val">Timestamp: ${esc(e.timestamp||'—')}</div>
+      <div class="val">Published: ${esc(e.published_at||e.published||e.timestamp||'—')}</div>
       <div class="val">Threat Type: ${esc(e.threat_type||'—')}</div>
       <div class="val">KEV: ${e.kev_present?'YES (CISA Known Exploited)':'No'}</div>
     </div>
@@ -1095,7 +1098,7 @@ async function exportData(fmt){
     const rows=data.map(row=>[
       row.title, row.risk_score, row.severity, row.actor_tag,
       Array.isArray(row.mitre_tactics)?row.mitre_tactics.join(';'):'',
-      row.ioc_count??0, row.kev_present?'YES':'NO', row.timestamp
+      row.ioc_count??0, row.kev_present?'YES':'NO', row.published_at||row.published||row.timestamp
     ].map(csvCell).join(','));
     triggerExportDownload(headers.map(csvCell).join(',')+'\r\n'+rows.join('\r\n'),
       'sentinel_apex_'+Date.now()+'.csv','text/csv;charset=utf-8');
