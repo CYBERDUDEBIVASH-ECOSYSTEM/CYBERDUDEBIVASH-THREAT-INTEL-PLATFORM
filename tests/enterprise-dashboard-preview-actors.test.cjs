@@ -378,3 +378,35 @@ test('severity filters and KPI classification follow authoritative published lab
   assert.equal(state.filtered.length,1);
   assert.equal(state.filtered[0].title,'high but high score');
 });
+
+
+test('optional malformed MITRE/IOC preview fields do not break table or drawer',()=>{
+  const record={
+    id:'intel--test',title:'P0 sample',description:'Verified source',severity:'HIGH',
+    risk_score:8.9,actor_tag:'Unattributed',mitre_tactics:'unexpected string',
+    iocs:{cve:'CVE-2026-invalid'},cve_ids:['CVE-2026-12345'],
+    published_at:'2026-11-18T12:00:00Z',ioc_count:0,kev_present:false,
+  };
+  const nodes=Object.fromEntries(['intelBody','pageInfo','btnPrev','btnNext',
+    'btnPageNum','drawerTitle','drawerBody','drawerOverlay','detailDrawer'].map(id=>
+      [id,{innerHTML:'',textContent:'',classList:{add:()=>{}}}]));
+  const state={filtered:[record],page:1,feedLoaded:true};
+  const esc=x=>String(x??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const ctx={STATE:state,document:{getElementById:id=>nodes[id]},
+    PAGE_SIZE:25,esc,riskBadge:x=>'<span>'+x+'</span>'};
+  let start=html.indexOf('function renderTable(){');
+  let end=html.indexOf('function changePage(dir){',start);
+  assert.ok(start>=0&&end>start);
+  vm.runInNewContext(html.slice(start,end)+'this.renderTable=renderTable;',ctx);
+  ctx.renderTable();
+  assert.match(nodes.intelBody.innerHTML,/CVE-2026-12345/);
+  assert.doesNotMatch(nodes.intelBody.innerHTML,/CVE-2026-invalid/);
+  start=html.indexOf('function openDrawer(idx){');
+  end=html.indexOf('function closeDrawer(){',start);
+  assert.ok(start>=0&&end>start);
+  vm.runInNewContext(html.slice(start,end)+'this.openDrawer=openDrawer;',ctx);
+  ctx.openDrawer(0);
+  assert.match(nodes.drawerBody.innerHTML,/Published:/);
+  assert.match(nodes.drawerBody.innerHTML,/None mapped/);
+  assert.match(html,/row\.published_at\|\|row\.published\|\|row\.timestamp/);
+});
