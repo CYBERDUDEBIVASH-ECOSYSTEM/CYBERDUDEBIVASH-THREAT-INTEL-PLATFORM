@@ -41,7 +41,7 @@ test('no stale raw GitHub fallback and no unconditional CONNECTED claim', () => 
   assert.match(html, /STATE\.manifest=\[\];STATE\.feedLoaded=false/);
 });
 test('paid actor registry uses credential headers and fails closed on access denial', () => {
-  assert.match(html, /BASE\+'\/api\/actors\?limit=100'/);
+  assert.match(html, /BASE\+'\/api\/actors\?limit=200'/);
   assert.match(html, /resp\.status===401\|\|resp\.status===403/);
   assert.match(html, /read:actors/);
   assert.match(html, /authHeaders\(\)/);
@@ -103,7 +103,7 @@ test('gateway login contract uses implemented /api/auth/login, not missing /api/
   const end=html.indexOf('function clearAuth(){',begin);
   assert.ok(begin>=0&&end>begin);
   const code=html.slice(begin,end);
-  assert.match(code,/fetch\(BASE\+'\/api\/auth\/login'/);
+  assert.match(code,/fetchWithTimeout\(BASE\+'\/api\/auth\/login'/);
   assert.doesNotMatch(code,/\/api\/auth\/token/);
   assert.match(code,/STATE\.jwtToken = d\.token/);
 });
