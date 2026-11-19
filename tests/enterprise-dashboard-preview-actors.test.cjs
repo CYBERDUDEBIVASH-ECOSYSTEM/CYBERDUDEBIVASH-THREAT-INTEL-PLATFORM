@@ -48,3 +48,51 @@ test('paid actor registry uses credential headers and fails closed on access den
   assert.doesNotMatch(html, /consoleApiKey'\)\.value=STATE\.apiKey/);
   assert.match(html, /esc\(x\.name\)/);
 });
+
+
+test('saved search containing shell-like quotes is never compiled into onclick JavaScript',()=>{
+  const start=html.indexOf('function renderSavedSearches(){');
+  const end=html.indexOf('function loadSearch(q,f){',start);
+  assert.ok(start>=0 && end>start);
+  const row={id:123,query:"');alert('XSS');//",filter:"all",results:1,saved:"2026-11-19T00:00:00Z"};
+  const host={innerHTML:'',onclick:null};
+  const ctx={STATE:{savedSearches:[row]},document:{getElementById:()=>host},
+    esc:s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'),
+    loadSearch:()=>{},deleteSearch:()=>{}};
+  vm.runInNewContext(html.slice(start,end)+';this.renderSavedSearches=renderSavedSearches;',ctx);
+  ctx.renderSavedSearches();
+  assert.doesNotMatch(host.innerHTML,/onclick=/i);
+  assert.ok(host.innerHTML.includes("');alert('XSS');//"),'search text remains readable');
+  assert.ok(host.innerHTML.includes('data-search-index="0"'));
+  assert.equal(typeof host.onclick,'function');
+});
+test('live preview loads nested results and API failure clears stale previously visible rows',async()=>{
+  const from=html.indexOf('async function loadManifest(){'),to=html.indexOf('function setLoading(on){',from);
+  assert.ok(from>=0 && to>from);
+  const {parseManifest,resolveActor}=pureDashboardFunctions();
+  const ids=['feedSource','lastSync','feedTier'];
+  const elements=Object.fromEntries(ids.map(k=>[k,{textContent:''}]));
+  let fetched=0,metricUpdates=0;
+  const ctx={STATE:{jwtToken:'',apiKey:'',manifest:[{id:'old'}],feedLoaded:true},
+    document:{getElementById:k=>elements[k]||{textContent:''}},
+    BASE:'https://intel.cyberdudebivash.com',parseManifest,resolveActor,
+    fetchWithTimeout:async()=>{fetched++;return {ok:true,json:async()=>({status:'ok',preview:{items:[{id:'fresh',title:'Example',actor_tag:'UNC-UNKNOWN'}],generated_at:'2026-11-19T00:00:00Z'}})};},
+    setLoading:()=>{},updateConnectionStatus:()=>{},showMetricsUnavailable:()=>{},
+    applyFilters:()=>{},updateMetrics:()=>{metricUpdates++},checkWatchlistAlerts:()=>{},console,Date};
+  vm.runInNewContext(html.slice(from,to)+';this.loadManifest=loadManifest;',ctx);
+  await ctx.loadManifest();
+  assert.equal(ctx.STATE.feedLoaded,true);
+  assert.equal(ctx.STATE.manifest.length,1);
+  assert.equal(ctx.STATE.manifest[0].id,'fresh');
+  assert.equal(ctx.STATE.manifest[0].actor_tag,'Unattributed');
+  assert.equal(elements.feedTier.textContent,'Free Preview');
+  assert.equal(fetched,1);
+  assert.equal(metricUpdates,1);
+  ctx.fetchWithTimeout=async()=>{throw new Error('simulated offline');};
+  let hidden=0;ctx.showMetricsUnavailable=()=>{hidden++};
+  await ctx.loadManifest();
+  assert.equal(ctx.STATE.feedLoaded,false);
+  assert.equal(ctx.STATE.manifest.length,0);
+  assert.equal(hidden,1);
+  assert.equal(metricUpdates,1,'unavailable feed must not rewrite zero into numeric KPIs');
+});
