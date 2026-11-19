@@ -137,6 +137,9 @@ jobs:
           python3 scripts/frontend_integrity.py verify
 
       - name: Commit and push onto this PR's own branch if the registry changed
+        env:
+          # Branch names are untrusted input; never interpolate an event expression into shell code.
+          PR_HEAD_REF: ${{ github.head_ref }}
         run: |
           git config user.name "CYBERDUDEBIVASH"
           git config user.email "bivash@cyberdudebivash.com"
@@ -167,13 +170,13 @@ jobs:
           # push race against a human pushing to the same PR branch at the
           # same time, not a rejected-by-ruleset push.
           for attempt in 1 2 3; do
-            if git push origin "HEAD:${{ github.head_ref }}"; then
-              echo "Pushed onto ${{ github.head_ref }} on attempt ${attempt}."
+            if git push origin "HEAD:${PR_HEAD_REF}"; then
+              echo "Pushed onto ${PR_HEAD_REF} on attempt ${attempt}."
               exit 0
             fi
             echo "Push attempt ${attempt} failed (branch moved) -- rebasing onto the latest and retrying."
-            git fetch origin "${{ github.head_ref }}"
-            git rebase "origin/${{ github.head_ref }}" || {
+            git fetch origin "${PR_HEAD_REF}"
+            git rebase "origin/${PR_HEAD_REF}" || {
               echo "FATAL: rebase conflict resyncing the registry -- resolve manually." >&2
               exit 1
             }
