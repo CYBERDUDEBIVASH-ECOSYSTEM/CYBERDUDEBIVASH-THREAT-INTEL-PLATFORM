@@ -240,6 +240,51 @@ def _item_cves(feed_item: Dict[str, Any]) -> List[str]:
     return out
 
 
+# P0: dossier and catalog must consume the same recorded same-CVE CVSS fallback.
+# The dossier's _load_cvss_fallback_index() deliberately uses the *first*
+# feed row with CVSS or EPSS metadata for a given CVE.  Preserve those exact
+# semantics here: a missing CVSS is NOT a license to infer one from APEX risk.
+_CVE_RENDERER_RE = re.compile(r"CVE-\\d{4}-\\d{4,}", re.IGNORECASE)
+
+
+def _renderer_cve_ids(item: Dict[str, Any]) -> List[str]:
+    ids: set = set()
+    explicit = item.get("cve_ids") or ([item["cve_id"]] if item.get("cve_id") else [])
+    if isinstance(explicit, str):
+        explicit = [explicit]
+    for c in explicit or []:
+        if c:
+            ids.add(str(c).strip().upper())
+    for match in _CVE_RENDERER_RE.findall(str(item.get("title", ""))):
+        ids.add(match.upper())
+    return list(ids)
+
+
+def _catalog_cvss_fallback_index(feed_rows: List[Any]) -> Dict[str, Any]:
+    by_cve: Dict[str, Any] = {}
+    for item in feed_rows:
+        if not isinstance(item, dict):
+            continue
+        if item.get("cvss_score") is None and item.get("epss_score") is None:
+            continue
+        for cve in _renderer_cve_ids(item):
+            if cve not in by_cve:
+                by_cve[cve] = item.get("cvss_score")
+    return by_cve
+
+
+def _catalog_resolved_cvss(item: Dict[str, Any], by_cve: Dict[str, Any]) -> Any:
+    cvss = item.get("cvss_score")
+    if cvss is not None:
+        return cvss
+    for cve in _renderer_cve_ids(item):
+        if cve in by_cve:
+            # Mirror the dossier's first matching fallback entry, including
+            # EPSS-only matches that cannot substantiate a CVSS rating.
+            return by_cve[cve]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Artifact-embedded metadata fallback
 #
@@ -315,6 +360,7 @@ def main() -> int:
     #    canonical timestamp the 24h window filter below requires)
     # ------------------------------------------------------------------
     feed_map: Dict[str, dict] = {}
+    feed_data: Any = []
     if API_FEED.exists():
         feed_data = _load_json_safe(API_FEED)
         if isinstance(feed_data, list):
@@ -324,6 +370,9 @@ def main() -> int:
             log.info("api/feed.json: %d items loaded for enrichment", len(feed_map))
     else:
         log.warning("api/feed.json not found — index will have minimal metadata")
+    cvss_fallback_index = _catalog_cvss_fallback_index(
+        feed_data if isinstance(feed_data, list) else []
+    )
 
     def _canonical_ts(report_id: str) -> Optional[datetime]:
         """Resolves a report's canonical intelligence timestamp via its
@@ -490,7 +539,8 @@ def main() -> int:
             if not _basis_item.get("severity") or str(_basis_item["severity"]).strip().upper() == "UNKNOWN":
                 _basis_item["severity"] = severity
             _basis = _di.severity_basis(
-                _basis_item, feed_item.get("cvss_score"), _kev_confirmed(feed_item)
+                _basis_item, _catalog_resolved_cvss(feed_item, cvss_fallback_index),
+                _kev_confirmed(feed_item)
             )
             severity = _basis["display"]
             severity_basis = _basis["severity_source"]
