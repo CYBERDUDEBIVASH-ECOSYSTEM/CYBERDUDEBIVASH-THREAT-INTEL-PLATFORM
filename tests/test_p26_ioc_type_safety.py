@@ -49,3 +49,22 @@ def test_each_item_counts_once_even_with_multiple_hardened_indicators():
         {"ioc_count": 2, "iocs": ["example.net", {"p20_hardened": True}]},
     ])
     assert result["p20_hardened_items"] == 2
+
+def test_string_false_hardening_label_cannot_claim_validated_provenance():
+    result = _mod._a7_ioc_audit([
+        {"ioc_count": 3, "iocs": [
+            {"p20_hardened": "false"},
+            {"p20_hardened": "true"},
+            {"p20_hardened": 1},
+        ]},
+    ])
+    assert result["p20_hardened_items"] == 0
+
+
+def test_only_boolean_true_is_counted_as_hardened():
+    result = _mod._a7_ioc_audit([
+        {"ioc_count": 2, "iocs": [
+            {"p20_hardened": "false"}, {"p20_hardened": True},
+        ]},
+    ])
+    assert result["p20_hardened_items"] == 1
