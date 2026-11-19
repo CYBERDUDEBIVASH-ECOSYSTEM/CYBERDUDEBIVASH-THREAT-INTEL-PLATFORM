@@ -5899,13 +5899,17 @@ function renderTopThreats(data) {
             // widget. bughunter/incidents/responses/hunts are unrelated to
             // this mission's scope and are deliberately left reading
             // straight from main, unchanged.
+            // Reviewable Bug Hunter snapshots are sourced only from the current
+            // official repository main, never the retired owner's raw branch.
+            // A generated review branch is NOT a customer publication authority.
+            const REVIEWED_RECON_BASE = 'https://raw.githubusercontent.com/CYBERDUDEBIVASH-ECOSYSTEM/CYBERDUDEBIVASH-THREAT-INTEL-PLATFORM/main/';
             const ENGINE_URLS = {
                 nexus:    '/api/v1/intel/nexus_output.json',
                 genesis:  '/api/v1/intel/genesis_output.json',
                 cortex:   '/api/v1/intel/cortex_output.json',
                 quantum:  '/api/v1/intel/quantum_output.json',
                 sovereign: '/api/v1/intel/sovereign_output.json',
-                bughunter: RAW_BASE + 'data/bughunter/bughunter_output.json',
+                bughunter: REVIEWED_RECON_BASE + 'data/bughunter/bughunter_output.json',
                 incidents: RAW_BASE + 'data/incidents/incidents.json',
                 responses: RAW_BASE + 'data/responses/response_log.json',
                 hunts:     RAW_BASE + 'data/threathunts/hunts.json',
@@ -6367,6 +6371,23 @@ function renderTopThreats(data) {
                     if (feedEl && engineNotes.length && findings.length > 0) {
                         feedEl.innerHTML += '<div style="padding:6px 0;color:var(--text-muted);font-size:9px;line-height:1.45;">'
                             + engineNotes.join(' ') + '</div>';
+                    }
+                    // Historical observations remain inspectable, but never count
+                    // as current security posture. Never retimestamp saved evidence.
+                    if (feedEl && !scanView.recent && scanView.timestamp && data.status === 'COMPLETED') {
+                        var oldMetrics = [
+                            ['subdomain candidates', m.subdomains],
+                            ['reachable hosts', m.live_hosts],
+                            ['API path observations', m.api_endpoints],
+                            ['findings', m.total_findings],
+                        ].filter(function (item) { return measuredCount(item[1]) !== null; });
+                        var oldSummary = oldMetrics.map(function (item) {
+                            return escapeFinding(String(item[1])) + ' ' + escapeFinding(item[0]);
+                        }).join(' · ');
+                        var oldDate = escapeFinding(scanView.timestamp.slice(0, 10));
+                        feedEl.innerHTML = '<p role="note" style="margin:0 0 8px;color:#f59e0b;font-size:10px;line-height:1.6;">'
+                            + 'HISTORICAL SCAN (' + oldDate + ') — NOT CURRENT · Re-scan required. '
+                            + oldSummary + '.</p>' + feedEl.innerHTML;
                     }
                     // Health badge
                     var bhHeader = document.querySelector('#bughunter-section h2');
