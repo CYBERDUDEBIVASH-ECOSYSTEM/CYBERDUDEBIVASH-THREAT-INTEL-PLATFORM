@@ -240,7 +240,7 @@ def _a7_ioc_audit(items: list) -> dict:
     hardened_ioc_items = 0
     for i in items:
         iocs = i.get("iocs") or []
-        if any(isinstance(ioc, dict) and ioc.get("p20_hardened") for ioc in iocs):
+        if any(isinstance(ioc, dict) and ioc.get("p20_hardened") is True for ioc in iocs):
             hardened_ioc_items += 1
 
     n = max(len(items), 1)
