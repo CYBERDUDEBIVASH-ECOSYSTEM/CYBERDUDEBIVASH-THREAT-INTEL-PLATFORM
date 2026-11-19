@@ -238,7 +238,8 @@ def main() -> int:
 
     # P0 buyer-trust guard: unsupported production claims must not recur.
     index_path = REPO_ROOT / "index.html"
-    if index_path.exists():
+    check(index_path.is_file(), "index.html exists for mandatory customer-claim verification")
+    if index_path.is_file():
         visible_copy = " ".join(text_nodes(index_path.read_text(encoding="utf-8", errors="ignore")))
         for unsupported_claim in (
             r"Rollback-safe deployment with a tested rollback target",
