@@ -780,7 +780,13 @@ async function loadManifest(){
     try{
       const resp=await fetchWithTimeout(src.url,src.opts,src.ms);
       if(!isCurrent())return;
-      if(!resp.ok){error=src.label+' HTTP '+resp.status;continue;}
+      if(!resp.ok){
+        if(hasAuth&&src.label==='Authenticated Feed'&&(resp.status===401||resp.status===403)){
+          error='Authorized feed access denied (HTTP '+resp.status+'). Clear the key and sign in again.';
+          break; // Never disguise a paid entitlement failure as a free preview.
+        }
+        error=src.label+' HTTP '+resp.status;continue;
+      }
       const data=await resp.json();
       if(!isCurrent())return;
       if(!data||typeof data!=='object'||data.status==='unhealthy'||data.status==='error'){error='Invalid live response';continue;}
