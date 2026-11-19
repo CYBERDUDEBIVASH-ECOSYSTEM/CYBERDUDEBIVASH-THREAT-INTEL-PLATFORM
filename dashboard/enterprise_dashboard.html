@@ -1086,24 +1086,66 @@ function saveWatchlists(){ localStorage.setItem('cdb_watchlists',JSON.stringify(
 
 function renderWatchlists(){
   const c=document.getElementById('watchlistGrid');
-  if(STATE.watchlists.length===0){
-    c.innerHTML='<div class="empty-state"><div class="empty-icon">&#128065;</div><h3>No Watchlists</h3><p>Create watchlists to track threats.</p></div>';return;
+  const lists=Array.isArray(STATE.watchlists)?STATE.watchlists:[];
+  if(!lists.length){
+    c.innerHTML='<div class="empty-state"><h3>No Watchlists</h3><p>Create watchlists to track threats.</p></div>';
+    c.onclick=null;c.onkeydown=null;return;
   }
-  c.innerHTML=STATE.watchlists.map(wl=>{
-    const iid='wi_'+wl.id;
-    return `<div class="wl-card">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <h3>${esc(wl.name)}</h3>
-        <button class="btn btn-xs btn-danger" onclick="deleteWatchlist(${wl.id})">&#215;</button>
-      </div>
-      <div class="wl-meta">${wl.items.length} keywords &nbsp;|&nbsp; Created ${new Date(wl.created).toLocaleDateString()}</div>
-      <div class="wl-items">${wl.items.slice(0,10).map(it=>`<span class="tag tag-ioc" style="cursor:pointer" onclick="removeWatchlistItem(${wl.id},'${esc(it)}')" title="Click to remove">${esc(it.substring(0,35))} &#215;</span>`).join('')}${wl.items.length>10?`<span class="tag" style="background:var(--bg-elevated);color:var(--text-dim)">+${wl.items.length-10}</span>`:''}</div>
-      <div class="wl-add-form">
-        <input id="${iid}" placeholder="Add keyword or IOC..." onkeydown="if(event.key==='Enter')addWatchlistItem(${wl.id},'${iid}')">
-        <button class="btn btn-sm btn-accent" onclick="addWatchlistItem(${wl.id},'${iid}')">+</button>
-      </div>
-    </div>`;
+  // Untrusted localStorage and feed strings are presentation DATA, never JS.
+  // No dynamic IOC, name or ID is interpolated into executable attributes.
+  c.innerHTML=lists.slice(0,50).map((wl,index)=>{
+    const items=Array.isArray(wl?.items)?wl.items:[];
+    const name=typeof wl?.name==='string'?wl.name.slice(0,160):'Untitled watchlist';
+    const created=typeof wl?.created==='string'&&!isNaN(Date.parse(wl.created))
+      ?new Date(wl.created).toLocaleDateString():'Unknown';
+    return '<div class="wl-card" data-wl-index="'+index+'">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center">'+
+        '<h3>'+esc(name)+'</h3>'+
+        '<button type="button" class="btn btn-xs btn-danger" data-wl-delete="'+index+'">&#215;</button></div>'+
+      '<div class="wl-meta">'+items.length+' keywords | Created '+esc(created)+'</div>'+
+      '<div class="wl-items">'+items.slice(0,10).map((it,itemIndex)=>
+        '<span role="button" tabindex="0" class="tag tag-ioc" style="cursor:pointer" '+
+        'data-wl-item="'+itemIndex+'" data-wl-index="'+index+'" title="Remove IOC">'+
+        esc(String(it??'').slice(0,100))+' &#215;</span>'
+      ).join('')+(items.length>10?'<span class="tag">+'+(items.length-10)+'</span>':'')+'</div>'+
+      '<div class="wl-add-form"><input id="wi_'+index+'" data-wl-input="'+index+'" '+
+        'placeholder="Add keyword or IOC..." autocomplete="off">'+
+        '<button class="btn btn-sm btn-accent" type="button" data-wl-add="'+index+'">+</button></div></div>';
   }).join('');
+  function boundedIndex(element,attribute,max){
+    const raw=element?.getAttribute(attribute);
+    if(typeof raw!=='string'||!/^(0|[1-9][0-9]{0,4})$/.test(raw))return -1;
+    const n=Number(raw);
+    return Number.isSafeInteger(n)&&n>=0&&n<max?n:-1;
+  }
+  c.onclick=function(event){
+    if(!event.target||typeof event.target.closest!=='function')return;
+    const remove=event.target.closest('[data-wl-item]');
+    const del=event.target.closest('[data-wl-delete]');
+    const add=event.target.closest('[data-wl-add]');
+    const target=remove||del||add;
+    if(!target)return;
+    const wlIndex=boundedIndex(target,'data-wl-index',lists.length);
+    const index=wlIndex>=0?wlIndex:boundedIndex(target,del?'data-wl-delete':'data-wl-add',lists.length);
+    if(index<0)return;
+    const wl=lists[index];if(!wl)return;
+    if(remove){
+      const items=Array.isArray(wl.items)?wl.items:[];
+      const itemIndex=boundedIndex(remove,'data-wl-item',items.length);
+      if(itemIndex>=0)removeWatchlistItem(wl.id,items[itemIndex]);
+    }else if(del)deleteWatchlist(wl.id);
+    else addWatchlistItem(wl.id,'wi_'+index);
+  };
+  c.onkeydown=function(event){
+    if(event.key!=='Enter'||!event.target?.closest)return;
+    const input=event.target.closest('[data-wl-input]');
+    const item=event.target.closest('[data-wl-item]');
+    if(!input&&!item)return;
+    event.preventDefault();
+    if(item){c.onclick({target:item});return;}
+    const index=boundedIndex(input,'data-wl-input',lists.length);
+    if(index>=0&&lists[index])addWatchlistItem(lists[index].id,'wi_'+index);
+  };
 }
 
 // ── Alerts ────────────────────────────────────────────────────────────────────
