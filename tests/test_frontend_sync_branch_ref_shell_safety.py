@@ -30,7 +30,9 @@ class TestFrontendSyncShellTrustBoundary(unittest.TestCase):
     def test_shell_metacharacters_in_branch_name_are_literal_data(self):
         # Git accepts ref names with command-substitution characters.
         # The shell MUST receive them from the environment after parsing.
-        value = "fix/$(printf P0_INJECTION_SENTINEL)`printf SECOND_SENTINEL`"
+        value = "fix/$(printf${IFS}P0_INJECTION_SENTINEL)"
+        # Prove the payload is a legal git branch, not an impossible input.
+        subprocess.run(["git", "check-ref-format", "--branch", value], check=True, capture_output=True)
         env = dict(os.environ, PR_HEAD_REF=value)
         result = subprocess.run(
             ["bash", "-c", 'printf "%s" "HEAD:${PR_HEAD_REF}"'],
@@ -38,6 +40,12 @@ class TestFrontendSyncShellTrustBoundary(unittest.TestCase):
         )
         self.assertEqual(result.stdout, "HEAD:" + value)
         self.assertEqual(result.stderr, "")
+        # Negative control: direct shell-template interpolation executes the payload.
+        unsafe = subprocess.run(
+            ["bash", "-c", 'printf "%s" "HEAD:' + value + '"'],
+            text=True, capture_output=True, check=True,
+        )
+        self.assertEqual(unsafe.stdout, "HEAD:fix/P0_INJECTION_SENTINEL")
 
 
 if __name__ == "__main__":
