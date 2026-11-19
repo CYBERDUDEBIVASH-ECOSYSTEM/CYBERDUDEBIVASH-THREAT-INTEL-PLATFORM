@@ -324,7 +324,7 @@ body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(5
       </div>
       <div class="metric-card metric-green">
         <div class="metric-value" id="mIOCs">&#8212;</div>
-        <div class="metric-label">IOCs Extracted</div>
+        <div class="metric-label">Visible IOCs</div>
       </div>
     </div>
 
@@ -849,12 +849,23 @@ function setLoading(on){
 }
 
 // ── Metrics ──────────────────────────────────────────────────────────────────
+function severityBucket(e){
+  const label=typeof e?.severity==='string'?e.severity.trim().toLowerCase():'';
+  // Source classification is authoritative; risk score is a distinct
+  // quantitative signal and must not silently reclassify the publisher.
+  if(['critical','high','medium','low'].includes(label))return label;
+  const value=e?.risk_score;
+  const score=typeof value==='number'?value:NaN;
+  if(!Number.isFinite(score)||score<0||score>10)return 'unknown';
+  return score>=8?'critical':score>=6?'high':score>=4?'medium':'low';
+}
 function updateMetrics(){
   const m=STATE.manifest;
   const total=m.length;
-  const critical=m.filter(e=>(e.risk_score||0)>=8||String(e.severity||'').toUpperCase()==='CRITICAL').length;
-  const high=m.filter(e=>(e.risk_score||0)>=6&&(e.risk_score||0)<8).length;
-  const avg=total>0?(m.reduce((s,e)=>s+(e.risk_score||0),0)/total).toFixed(1):'0';
+  const critical=m.filter(e=>severityBucket(e)==='critical').length;
+  const high=m.filter(e=>severityBucket(e)==='high').length;
+  const measured=m.map(e=>e.risk_score).filter(v=>typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=10);
+  const avg=measured.length?(measured.reduce((sum,v)=>sum+v,0)/measured.length).toFixed(1):'—';
   const actors=new Set(m.map(e=>e.actor_tag).filter(a=>a&&a!=='Unattributed'&&a!=='Unknown'));
   let iocs=0;
   m.forEach(e=>{
@@ -951,13 +962,7 @@ function filterSeverity(level, btn){
 function applyFilters(){
   let result=[...STATE.manifest];
   if(STATE.filter!=='all'){
-    const ranges={critical:[8,100],high:[6,8],medium:[4,6],low:[0,4]};
-    const [mn,mx]=ranges[STATE.filter]||[0,100];
-    result=result.filter(e=>{
-      const s=parseFloat(e.risk_score||0);
-      if(STATE.filter==='critical') return s>=8||String(e.severity||'').toUpperCase()==='CRITICAL';
-      return s>=mn&&s<mx;
-    });
+    result=result.filter(e=>severityBucket(e)===STATE.filter);
   }
   if(STATE.query){
     result=result.filter(e=>JSON.stringify(e).toLowerCase().includes(STATE.query));
