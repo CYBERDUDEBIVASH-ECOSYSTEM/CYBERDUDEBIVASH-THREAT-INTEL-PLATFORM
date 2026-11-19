@@ -274,3 +274,28 @@ test('stale and unverified previews cannot be displayed as live',async()=>{
   assert.equal(state.manifest[0].actor_tag,'Unattributed');
   assert.equal(verified,1);
 });
+
+test('paid 401/403 feed denial is never disguised by anonymous preview fallback',async()=>{
+  const from=html.indexOf('async function loadManifest(){'),to=html.indexOf('function setLoading(on){',from);
+  const {parseManifest,resolveActor}=pureDashboardFunctions();
+  for(const status of [401,403]){
+    const state={apiKey:'',jwtToken:'signed.jwt',authEpoch:0,feedRequestId:0,feedLoaded:true,manifest:[{id:'paid-old'}]};
+    const elements=Object.fromEntries(['feedSource','feedTier','lastSync'].map(k=>[k,{textContent:''}]));
+    const requests=[];
+    const ctx={STATE:state,document:{getElementById:k=>elements[k]||{}},
+      BASE:'https://intel.cyberdudebivash.com',authHeaders:()=>({Authorization:'Bearer test'}),
+      parseManifest,resolveActor,
+      fetchWithTimeout:async url=>{requests.push(url);return {ok:false,status}},
+      setLoading:()=>{},updateConnectionStatus:()=>{},showMetricsUnavailable:()=>{},
+      applyFilters:()=>{},updateMetrics:()=>{throw new Error('No paid metrics may be shown')},
+      checkWatchlistAlerts:()=>{},console:{warn:()=>{}},Date};
+    vm.runInNewContext(html.slice(from,to)+';this.loadManifest=loadManifest;',ctx);
+    await ctx.loadManifest();
+    assert.equal(requests.length,1);
+    assert.match(requests[0],/\/api\/feed$/);
+    assert.equal(state.feedLoaded,false);
+    assert.deepEqual(Array.from(state.manifest),[]);
+    assert.match(elements.feedSource.textContent,/Authorized feed access denied/);
+    assert.equal(elements.feedTier.textContent,'Access unverified');
+  }
+});
