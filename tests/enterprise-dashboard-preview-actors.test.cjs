@@ -76,7 +76,7 @@ test('live preview loads nested results and API failure clears stale previously 
   const ctx={STATE:{jwtToken:'',apiKey:'',manifest:[{id:'old'}],feedLoaded:true},
     document:{getElementById:k=>elements[k]||{textContent:''}},
     BASE:'https://intel.cyberdudebivash.com',parseManifest,resolveActor,
-    fetchWithTimeout:async()=>{fetched++;return {ok:true,json:async()=>({status:'ok',preview:{items:[{id:'fresh',title:'Example',actor_tag:'UNC-UNKNOWN'}],generated_at:'2026-11-19T00:00:00Z'}})};},
+    fetchWithTimeout:async()=>{fetched++;return {ok:true,json:async()=>({status:'ok',preview:{items:[{id:'fresh',title:'Example',actor_tag:'UNC-UNKNOWN',actor_display_name:'Unknown Threat Actor',published_at:'2026-11-18T08:00:00Z'}],generated_at:'2026-11-19T00:00:00Z',freshness_status:'FRESH',publication_state:'fresh',age_seconds:100,max_age_seconds:21600}})};},
     setLoading:()=>{},updateConnectionStatus:()=>{},showMetricsUnavailable:()=>{},
     applyFilters:()=>{},updateMetrics:()=>{metricUpdates++},checkWatchlistAlerts:()=>{},console,Date};
   vm.runInNewContext(html.slice(from,to)+';this.loadManifest=loadManifest;',ctx);
@@ -188,7 +188,7 @@ test('older concurrent feed response cannot replace newer verified source',async
   const old=new Promise(resolve=>{resolveOld=resolve});
   const document={getElementById:()=>({textContent:''})};
   const ctx={STATE:state,document,BASE:'https://intel.cyberdudebivash.com',
-    fetchWithTimeout:async()=>++calls===1?old:{ok:true,json:async()=>({preview:{items:[{id:'new'}]}})},
+    fetchWithTimeout:async()=>++calls===1?old:{ok:true,json:async()=>({preview:{items:[{id:'new'}],generated_at:'2026-11-19T02:22:17Z',freshness_status:'FRESH',publication_state:'fresh',age_seconds:100,max_age_seconds:21600}})},
     authHeaders:()=>({}),parseManifest,resolveActor,setLoading:()=>{},
     updateConnectionStatus:()=>{},showMetricsUnavailable:()=>{},
     applyFilters:()=>{},updateMetrics:()=>{},checkWatchlistAlerts:()=>{},console,Date};
@@ -196,7 +196,7 @@ test('older concurrent feed response cannot replace newer verified source',async
   const first=ctx.loadManifest();
   await Promise.resolve();
   await ctx.loadManifest();
-  resolveOld({ok:true,json:async()=>({preview:{items:[{id:'old'}]}})});
+  resolveOld({ok:true,json:async()=>({preview:{items:[{id:'old'}],generated_at:'2026-11-19T02:22:17Z',freshness_status:'FRESH',publication_state:'fresh',age_seconds:100,max_age_seconds:21600}})});
   await first;
   assert.equal(state.manifest.length,1);
   assert.equal(state.manifest[0].id,'new');
@@ -240,4 +240,37 @@ test('actor query denies late privileged rows after session generation changes',
   await request;
   assert.equal(state.actorRows.length,0);
   assert.doesNotMatch(elements.actorRegistryBody.innerHTML,/PRIVATE ACTOR/);
+});
+
+test('production preview placeholder must not be counted as named actor',()=>{
+  const {resolveActor}=pureDashboardFunctions();
+  assert.equal(resolveActor({actor_display_name:'Unknown Threat Actor'}),'Unattributed');
+  assert.equal(resolveActor({actor_display_name:'Unknown Threat Actor',actor_tag:'APT29'}),'APT29');
+});
+test('stale and unverified previews cannot be displayed as live',async()=>{
+  const from=html.indexOf('async function loadManifest(){'),to=html.indexOf('function setLoading(on){',from);
+  const {parseManifest,resolveActor}=pureDashboardFunctions();
+  const elements=Object.fromEntries(['feedSource','lastSync','feedTier'].map(k=>[k,{textContent:''}]));
+  const state={apiKey:'',jwtToken:'',authEpoch:0,feedRequestId:0,feedLoaded:true,manifest:[{id:'old'}]};
+  let phase='STALE',unavailable=0,verified=0;
+  const ctx={STATE:state,document:{getElementById:k=>elements[k]||{textContent:''}},
+    BASE:'https://intel.cyberdudebivash.com',parseManifest,resolveActor,
+    fetchWithTimeout:async()=>({ok:true,status:200,json:async()=>({status:'ok',preview:{
+      items:[{id:'intel1',actor_display_name:'Unknown Threat Actor',published_at:'2026-11-18T00:00:00Z'}],
+      generated_at:'2026-11-19T02:22:17Z',publication_state:phase==='FRESH'?'fresh':'stale',
+      freshness_status:phase,age_seconds:phase==='FRESH'?100:21601,max_age_seconds:21600
+    }})}),setLoading:()=>{},updateConnectionStatus:()=>{},
+    showMetricsUnavailable:()=>{unavailable++},applyFilters:()=>{},updateMetrics:()=>{verified++},
+    checkWatchlistAlerts:()=>{},console:{warn:()=>{}},Date};
+  vm.runInNewContext(html.slice(from,to)+';this.loadManifest=loadManifest;',ctx);
+  await ctx.loadManifest();
+  assert.equal(state.feedLoaded,false);
+  assert.equal(state.manifest.length,0);
+  assert.equal(unavailable,1);
+  assert.equal(verified,0);
+  phase='FRESH';
+  await ctx.loadManifest();
+  assert.equal(state.feedLoaded,true);
+  assert.equal(state.manifest[0].actor_tag,'Unattributed');
+  assert.equal(verified,1);
 });
