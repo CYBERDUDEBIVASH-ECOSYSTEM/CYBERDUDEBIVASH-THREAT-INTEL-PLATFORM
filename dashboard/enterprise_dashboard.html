@@ -269,6 +269,7 @@ body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(5
   </div>
   <nav class="topbar-nav">
     <button class="active" data-panel="intelligence" onclick="showPanel('intelligence',this)">Intelligence</button>
+    <button data-panel="actors" onclick="showPanel('actors',this)">Actor Registry</button>
     <button data-panel="alerts" onclick="showPanel('alerts',this)">Alerts <span id="alertBadge" style="display:none;background:var(--critical);color:#fff;font-size:.7em;padding:1px 5px;border-radius:8px;margin-left:4px"></span></button>
     <button data-panel="watchlists" onclick="showPanel('watchlists',this)">Watchlists</button>
     <button data-panel="searches" onclick="showPanel('searches',this)">Saved Searches</button>
@@ -290,7 +291,7 @@ body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(5
   <div style="font-size:.82em;color:var(--text-secondary);white-space:nowrap;font-weight:600;">&#128274; Full Intel Access:</div>
   <input type="password" id="apiKeyInput" placeholder="Enter API Key (cdb_live_...)" autocomplete="off" oninput="onKeyInput()">
   <button class="btn btn-accent btn-sm" onclick="authenticateKey()">&#128275; Unlock Enterprise Feed</button>
-  <div class="auth-status" id="authStatus">Enter your Enterprise API key for full feed access (310+ advisories, IOCs, STIX exports).</div>
+  <div class="auth-status" id="authStatus">Enter an authorized API key to unlock paid intelligence and actor-registry features. Free Preview shows only the latest public items.</div>
   <button class="btn btn-sm btn-danger" onclick="clearAuth()" id="clearAuthBtn" style="display:none">&#215; Clear Key</button>
 </div>
 
@@ -303,7 +304,7 @@ body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(5
     <div class="metrics-strip">
       <div class="metric-card metric-accent">
         <div class="metric-value" id="mTotal">&#8212;</div>
-        <div class="metric-label">Total Advisories</div>
+        <div class="metric-label">Visible Advisories</div>
       </div>
       <div class="metric-card metric-critical">
         <div class="metric-value" id="mCritical">&#8212;</div>
@@ -329,9 +330,9 @@ body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(5
 
     <!-- Status Bar -->
     <div class="status-bar">
-      <div class="status-connected">
-        <div class="status-dot"></div>
-        CONNECTED &#8212; CYBERDUDEBIVASH SENTINEL APEX
+      <div class="status-connected" id="connectionStatus" role="status" aria-live="polite" style="color:var(--text-dim)">
+        <div class="status-dot" id="connectionDot" style="background:var(--text-dim)"></div>
+        <span id="connectionLabel">CONNECTING — SENTINEL APEX</span>
       </div>
       <div class="status-right">
         <span id="feedSource" style="color:var(--text-dim)">Initializing...</span>
@@ -398,6 +399,20 @@ body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(5
         <button class="btn btn-sm" id="btnNext" onclick="changePage(1)" disabled>Next &rsaquo;</button>
       </div>
     </div>
+  </div>
+
+  <!-- ===== AUTHENTICATED ACTOR REGISTRY ===== -->
+  <div class="panel" id="panel-actors">
+    <div class="section-header">
+      <h2>Source-attributed Actor Registry</h2>
+      <button class="btn btn-sm btn-accent" onclick="loadActorRegistry()">&#8635; Refresh Registry</button>
+    </div>
+    <div class="api-card">Profiles are derived from attributed reports in the backend registry. Requires an authorized API key with <code>read:actors</code> scope; the public APT tracker is a separate, limited view.</div>
+    <div id="actorRegistryStatus" role="status" aria-live="polite" style="padding:12px;color:var(--text-secondary)">Authenticate to view source-attributed actor records.</div>
+    <div class="table-wrap"><table class="intel-table">
+      <thead><tr><th>Actor</th><th>Attributed reports</th><th>Last observed</th><th>Mapped TTPs</th></tr></thead>
+      <tbody id="actorRegistryBody"><tr><td colspan="4" style="padding:24px;text-align:center">API key required</td></tr></tbody>
+    </table></div>
   </div>
 
   <!-- ===== ALERTS PANEL ===== -->
@@ -558,6 +573,8 @@ const PAGE_SIZE = 25;
 const STATE = {
   manifest: [],
   filtered: [],
+  feedLoaded: false,
+  actorRows: [],
   page: 1,
   filter: 'all',
   query: '',
@@ -591,6 +608,7 @@ function showPanel(name, btn){
   document.getElementById('panel-'+name).classList.add('active');
   if(btn) btn.classList.add('active');
   if(name==='sla' && !STATE.sla) loadSLA();
+  if(name==='actors') loadActorRegistry();
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
@@ -618,7 +636,7 @@ async function authenticateKey(){
       // Credentials remain memory-only; reload/navigation requires re-authentication.
       const tier = d.tier || 'unknown';
       st.className='auth-status ok';
-      st.textContent = '✓ Authenticated — Tier: '+tier.toUpperCase()+' | Key: '+key.substring(0,12)+'...';
+      st.textContent = '✓ Authenticated — Tier: '+tier.toUpperCase();
       document.getElementById('clearAuthBtn').style.display='';
       document.getElementById('apiKeyInput').value='';
       document.getElementById('feedTier').textContent=tier.toUpperCase()+' Feed';
@@ -626,6 +644,7 @@ async function authenticateKey(){
       // Do not copy a raw long-lived credential into another DOM field.
       document.getElementById('consoleApiKey').value = '';
       refreshData();
+      if(document.getElementById('panel-actors').classList.contains('active'))loadActorRegistry();
     } else {
       st.className='auth-status err';
       st.textContent = '✗ ' + (d.message || 'Invalid key');
@@ -640,6 +659,9 @@ async function authenticateKey(){
 
 function clearAuth(){
   STATE.apiKey = ''; STATE.jwtToken = '';
+  STATE.actorRows=[];
+  document.getElementById('actorRegistryStatus').textContent='Authenticate to view source-attributed actor records.';
+  document.getElementById('actorRegistryBody').innerHTML='<tr><td colspan="4">API key required</td></tr>';
   document.getElementById('authStatus').textContent = 'Key cleared. Enter your API key for full access.';
   document.getElementById('authStatus').className = 'auth-status';
   document.getElementById('clearAuthBtn').style.display='none';
@@ -654,35 +676,63 @@ function authHeaders(){
   return h;
 }
 
+// Paid actor registry; never expose profiles or keys on unauthorized requests.
+async function loadActorRegistry(){
+  const status=document.getElementById('actorRegistryStatus'),body=document.getElementById('actorRegistryBody');
+  if(!STATE.jwtToken&&!STATE.apiKey){
+    status.textContent='An authorized key with read:actors scope is required.';
+    body.innerHTML='<tr><td colspan="4">No actor records disclosed without authorization.</td></tr>';
+    return;
+  }
+  status.textContent='Loading authorized actor profiles…';
+  body.innerHTML='<tr><td colspan="4">Loading…</td></tr>';
+  try{
+    const resp=await fetchWithTimeout(BASE+'/api/actors?limit=100',{headers:authHeaders()},12000);
+    if(resp.status===401||resp.status===403){
+      status.textContent='Actor registry access denied: key lacks read:actors scope.';
+      body.innerHTML='<tr><td colspan="4">Contact support for authorized actor access.</td></tr>';return;
+    }
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    const data=await resp.json();
+    if(!Array.isArray(data?.data?.actors))throw new Error('Invalid actor registry response');
+    const actors=data.data.actors.filter(x=>x&&typeof x.name==='string').slice(0,100);
+    STATE.actorRows=actors;
+    status.textContent='Attributed actors returned: '+actors.length+' (API limit: 100; not total database coverage).';
+    body.innerHTML=actors.length?actors.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+esc(x.activity_count??'Not reported')+
+      '</td><td>'+esc(x.last_seen||'Not reported')+'</td><td>'+esc(x.ttp_count??'Not reported')+'</td></tr>').join(''):
+      '<tr><td colspan="4">No source-attributed actor records available in the current registry.</td></tr>';
+  }catch(e){
+    status.textContent='Actor registry unavailable; no profiles displayed.';
+    body.innerHTML='<tr><td colspan="4">Retry after API recovery.</td></tr>';
+  }
+}
+
 // ── Data Loading ─────────────────────────────────────────────────────────────
 function parseManifest(d){
   if(Array.isArray(d)) return d;
-  return d.advisories||d.items||d.entries||d.data||d.reports||d.feed||[];
+  if(!d || typeof d!=='object') return [];
+  const choices=[d.preview?.items,d.data?.items,d.items,d.advisories,
+    d.entries,d.data?.advisories,d.reports,d.feed?.items,d.feed];
+  return choices.find(Array.isArray)||[];
 }
-
-const ACTOR_MAP=[
-  ['APT28','APT28'],['Fancy Bear','APT28'],['Sofacy','APT28'],
-  ['APT29','APT29'],['Cozy Bear','APT29'],['Midnight Blizzard','APT29'],['Nobelium','APT29'],
-  ['APT41','APT41'],['Double Dragon','APT41'],['Winnti','APT41'],
-  ['Lazarus','Lazarus Group'],['Hidden Cobra','Lazarus Group'],['ZINC','Lazarus Group'],
-  ['LockBit','LockBit'],['REvil','REvil/Sodinokibi'],['Cl0p','Cl0p/TA505'],['TA505','Cl0p/TA505'],
-  ['Volt Typhoon','Volt Typhoon'],['Salt Typhoon','Salt Typhoon'],
-  ['Scattered Spider','Scattered Spider'],['Octo Tempest','Scattered Spider'],
-  ['ALPHV','ALPHV/BlackCat'],['BlackCat','ALPHV/BlackCat'],
-  ['Sandworm','Sandworm'],['FIN7','FIN7'],['Carbanak','FIN7'],
-  ['Qilin','Qilin'],['Akira','Akira'],['Black Basta','Black Basta'],['Rhysida','Rhysida'],
-  ['Kimsuky','Kimsuky'],['Charming Kitten','Charming Kitten'],['Handala','Handala Hack'],
-];
 function resolveActor(e){
-  const ex=e.actor_tag||'';
-  if(ex&&!['UNC-UNKNOWN','UNC-CDB','Unknown',''].includes(ex)) return ex;
-  const hay=((e.title||'')+' '+(e.description||'')).toLowerCase();
-  for(const [kw,a] of ACTOR_MAP){ if(hay.includes(kw.toLowerCase())) return a; }
-  const tt=(e.threat_type||'').toLowerCase();
-  if(tt.includes('ransomware')) return 'Ransomware Actor';
-  if(tt.includes('apt')||tt.includes('nation')) return 'Nation-State APT';
-  if(tt.includes('supply')) return 'Supply Chain Actor';
-  return 'Unattributed';
+  if(!e || e.actor_paywall?.allowed===false) return 'Unattributed';
+  const value=[e.actor_display_name,e.actor,e.actor_tag].find(a=>typeof a==='string'&&a.trim());
+  if(!value) return 'Unattributed';
+  const tag=value.trim();
+  if(/^(?:UNC(?:-|$)|CDB-UNATTR|UNATTRIBUTED|UNKNOWN|N\/A|RANSOMWARE ACTOR|NATION-STATE APT|SUPPLY CHAIN ACTOR)/i.test(tag)) return 'Unattributed';
+  return tag.slice(0,120);
+}
+function updateConnectionStatus(label,ok){
+  const el=document.getElementById('connectionLabel'),dot=document.getElementById('connectionDot'),status=document.getElementById('connectionStatus');
+  if(el)el.textContent=label;
+  if(dot)dot.style.background=ok?'var(--green)':'var(--high)';
+  if(status)status.style.color=ok?'var(--green)':'var(--high)';
+}
+function showMetricsUnavailable(){
+  for(const id of ['mTotal','mCritical','mHigh','mAvgRisk','mActors','mIOCs']){
+    const el=document.getElementById(id);if(el)el.textContent='—';
+  }
 }
 
 async function fetchWithTimeout(url, opts, ms){
@@ -693,40 +743,46 @@ async function fetchWithTimeout(url, opts, ms){
 
 async function loadManifest(){
   setLoading(true);
-  const hasAuth = !!(STATE.jwtToken||STATE.apiKey);
-
-  // Source priority: authenticated full feed → public preview → GitHub raw
-  const SOURCES = hasAuth ? [
-    {url:BASE+'/api/feed', opts:{headers:authHeaders()}, ms:12000, label:'Enterprise Feed'},
-    {url:BASE+'/api/preview', opts:{headers:{'Accept':'application/json'}}, ms:8000, label:'Preview Feed'},
-  ] : [
-    {url:BASE+'/api/preview', opts:{headers:{'Accept':'application/json'}}, ms:8000, label:'Preview Feed'},
-    {url:'../data/stix/feed_manifest.json', opts:{headers:{'Cache-Control':'no-cache'}}, ms:8000, label:'Local Manifest'},
-    {url:'https://raw.githubusercontent.com/cyberdudebivash/CYBERDUDEBIVASH-THREAT-INTEL-PLATFORM/main/data/stix/feed_manifest.json',
-      opts:{}, ms:10000, label:'GitHub Raw'},
-  ];
-
-  for(const s of SOURCES){
+  const hasAuth=!!(STATE.jwtToken||STATE.apiKey);
+  // Never substitute stale GitHub artifacts for live current public intel.
+  const SOURCES=hasAuth?[
+    {url:BASE+'/api/feed',opts:{headers:authHeaders()},ms:12000,label:'Authenticated Feed'},
+    {url:BASE+'/api/preview?limit=25',opts:{headers:{Accept:'application/json'}},ms:8000,label:'Public Preview'}
+  ]:[{url:BASE+'/api/preview?limit=25',opts:{headers:{Accept:'application/json'}},ms:8000,label:'Public Preview'}];
+  STATE.manifest=[];STATE.feedLoaded=false;
+  updateConnectionStatus('CONNECTING — SENTINEL APEX',false);
+  let error='Live intelligence unavailable';
+  for(const src of SOURCES){
     try{
-      const r = await fetchWithTimeout(s.url, s.opts, s.ms);
-      if(r.ok){
-        const d = await r.json();
-        const items = parseManifest(d);
-        if(items.length>0){
-          STATE.manifest = items.map(e=>({...e, actor_tag:resolveActor(e)}))
-            .sort((a,b)=>new Date(b.timestamp||0)-new Date(a.timestamp||0));
-          document.getElementById('feedSource').textContent = s.label+' ('+items.length+' items)';
-          document.getElementById('lastSync').textContent = 'Synced '+new Date().toLocaleTimeString();
-          if(hasAuth) document.getElementById('feedTier').textContent=(d.tier||'Enterprise').toUpperCase()+' Feed';
-          break;
-        }
-      }
-    }catch(e){ console.warn('[ED] Source failed:',s.url, e.message); continue; }
+      const resp=await fetchWithTimeout(src.url,src.opts,src.ms);
+      if(!resp.ok){error=src.label+' HTTP '+resp.status;continue;}
+      const data=await resp.json();
+      if(!data||typeof data!=='object'||data.status==='unhealthy'||data.status==='error'){error='Invalid live response';continue;}
+      const items=parseManifest(data).filter(item=>item&&typeof item==='object'&&!Array.isArray(item));
+      if(!items.length){error=src.label+' returned no current advisories';continue;}
+      STATE.manifest=items.map(item=>({...item,actor_tag:resolveActor(item)}))
+        .sort((a,b)=>(Date.parse(b.timestamp||b.published)||0)-(Date.parse(a.timestamp||a.published)||0));
+      STATE.feedLoaded=true;
+      const preview=src.label==='Public Preview';
+      document.getElementById('feedSource').textContent=src.label+' ('+items.length+' visible items)';
+      const generated=data.preview?.generated_at||data.generated_at;
+      const date=generated?new Date(generated):null;
+      document.getElementById('lastSync').textContent=date&&!isNaN(date.getTime())?'Feed '+date.toLocaleString():'Source timestamp unavailable';
+      document.getElementById('feedTier').textContent=preview?'Free Preview':String(data.tier||'Authorized')+' Feed';
+      updateConnectionStatus((preview?'PREVIEW AVAILABLE':'AUTHORIZED FEED AVAILABLE')+' — SENTINEL APEX',true);
+      break;
+    }catch(e){error=src.label+' request failed';console.warn('[ED] Feed request failure',e.message);}
   }
-
+  if(!STATE.feedLoaded){
+    STATE.manifest=[];
+    document.getElementById('feedSource').textContent=error;
+    document.getElementById('lastSync').textContent='No verified current feed';
+    document.getElementById('feedTier').textContent=hasAuth?'Access unverified':'Free Preview';
+    updateConnectionStatus('LIVE FEED UNAVAILABLE — SENTINEL APEX',false);
+    showMetricsUnavailable();
+  }
   applyFilters();
-  updateMetrics();
-  checkWatchlistAlerts();
+  if(STATE.feedLoaded){updateMetrics();checkWatchlistAlerts();}
   setLoading(false);
 }
 
@@ -783,13 +839,13 @@ function renderTable(){
   if(STATE.page>pages) STATE.page=pages;
   const slice=data.slice((STATE.page-1)*PAGE_SIZE, STATE.page*PAGE_SIZE);
 
-  document.getElementById('pageInfo').textContent=total===0?'No results':`Showing ${(STATE.page-1)*PAGE_SIZE+1}–${Math.min(STATE.page*PAGE_SIZE,total)} of ${total} advisories`;
+  document.getElementById('pageInfo').textContent=total===0?(STATE.feedLoaded?'No matching advisories':'Live feed unavailable'):`Showing ${(STATE.page-1)*PAGE_SIZE+1}–${Math.min(STATE.page*PAGE_SIZE,total)} of ${total} advisories`;
   document.getElementById('btnPrev').disabled=STATE.page<=1;
   document.getElementById('btnNext').disabled=STATE.page>=pages;
   document.getElementById('btnPageNum').textContent='Page '+STATE.page+' / '+pages;
 
   if(slice.length===0){
-    body.innerHTML='<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">&#128270;</div><h3>No results</h3><p>Try adjusting your search or filters.</p></div></td></tr>';
+    body.innerHTML=STATE.feedLoaded?'<tr><td colspan="7"><div class="empty-state"><h3>No matching advisories</h3><p>Adjust your search or filters.</p></div></td></tr>':'<tr><td colspan="7"><div class="empty-state"><h3>Live intelligence unavailable</h3><p>No archived data substituted. Refresh or check API status.</p></div></td></tr>';
     return;
   }
 
@@ -1121,7 +1177,7 @@ async function loadSLA(){
 function onEndpointChange(){
   const ep=document.getElementById('consoleEndpoint').value;
   const isPublic=['/api/health','/api/version','/api/preview','/api/platform/stats','/api/sla/status','/api/dark-web/status'].includes(ep);
-  if(!isPublic && STATE.apiKey) document.getElementById('consoleApiKey').value=STATE.apiKey;
+  // Do not duplicate the long-lived key into a second visible input.
 }
 
 function selectEndpoint(ep){
