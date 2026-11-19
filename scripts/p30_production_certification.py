@@ -37,6 +37,7 @@ Outputs: data/quality/p30_certification_report.json
 """
 
 from __future__ import annotations
+from p26_certification_guard import validate_p26_worldwide_report
 import json, os, pathlib, re, sys
 from datetime import datetime, timezone
 
@@ -245,9 +246,10 @@ def g12_p27_cert(items: list) -> dict:
 
 
 def g13_p26_cert(items: list) -> dict:
-    ok, detail = _check_tier("p26_certification_report.json", "release_tier", ["REJECTED"])
-    return {"gate": "G13", "name": "P26 Cert Report + tier != REJECTED", "pass": ok,
-            "detail": detail, "severity": "WARNING" if not ok else "OK"}
+    d = _load_quality("p26_certification_report.json")
+    ok, reason = validate_p26_worldwide_report(d, expected_items=len(items))
+    return {"gate": "G13", "name": "P26 Current-Run Worldwide Certification",
+            "pass": ok, "detail": reason, "severity": "BLOCKER" if not ok else "OK"}
 
 
 def g14_p25_trust(items: list) -> dict:
