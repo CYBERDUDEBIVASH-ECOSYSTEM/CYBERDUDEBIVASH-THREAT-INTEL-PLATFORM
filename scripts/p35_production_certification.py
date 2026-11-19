@@ -26,6 +26,7 @@ Exit codes:
 Output: data/quality/p35_certification_report.json
 """
 from __future__ import annotations
+from p26_certification_guard import validate_p26_worldwide_report
 
 import json
 import pathlib
@@ -106,9 +107,9 @@ def main() -> int:
          f"tier={p33.get('release_tier','?')}" if p33 else "not found")
 
     p26 = _load(_DATA / "p26_certification_report.json")
-    gate("G04", "P26 certification report present", "WARNING",
-         p26 is not None,
-         f"tier={p26.get('release_tier','?')}" if p26 else "not found")
+    p26_ok, p26_reason = validate_p26_worldwide_report(p26)
+    gate("G04", "P26 Current-Run Worldwide Certification", "BLOCKER",
+         p26_ok, p26_reason)
 
     p25 = _load(_DATA / "p25_enterprise_trust_gate.json")
     gate("G05", "P25 enterprise trust gate cert present", "WARNING",
