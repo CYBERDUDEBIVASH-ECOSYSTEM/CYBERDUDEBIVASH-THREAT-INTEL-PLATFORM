@@ -1036,7 +1036,7 @@ async function exportData(fmt){
       Array.isArray(row.mitre_tactics)?row.mitre_tactics.join(';'):'',
       row.ioc_count??0, row.kev_present?'YES':'NO', row.timestamp
     ].map(csvCell).join(','));
-    triggerExportDownload(headers.map(csvCell).join(',')+'\\r\\n'+rows.join('\\r\\n'),
+    triggerExportDownload(headers.map(csvCell).join(',')+'\r\n'+rows.join('\r\n'),
       'sentinel_apex_'+Date.now()+'.csv','text/csv;charset=utf-8');
   }
   toast('Exported '+data.length+' current visible items');
