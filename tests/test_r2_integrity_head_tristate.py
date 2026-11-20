@@ -116,3 +116,71 @@ def test_verified_present_keeps_catalog_intact(monkeypatch, tmp_path):
     monkeypatch.setattr(gate, "_r2_object_exists", lambda *args: True)
     assert gate.main() == 0
     assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_partial_current_run_missing_is_blocked_without_catalog_mutation(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    payload = json.loads(index.read_text())
+    second = {"id": "intel--second", "path": "/reports/2026/11/intel--second.html"}
+    payload["reports"].append(second)
+    payload["reports_listed"] = payload["total_reports"] = 2
+    index.write_text(json.dumps(payload))
+    latest.write_text(json.dumps(payload))
+    gate.FEED_PATH.write_text(json.dumps([
+        {"report_url": payload["reports"][0]["path"]},
+        {"report_url": second["path"]},
+    ]))
+    before = (index.read_bytes(), latest.read_bytes())
+    monkeypatch.setattr(gate, "_r2_object_exists",
+                        lambda key, *args: not key.endswith("intel--second.html"))
+    assert gate.main() == 1
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_feed_only_report_url_is_verified_and_blocks_release(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    extra = "/reports/2026/11/not-in-index.html"
+    gate.FEED_PATH.write_text(json.dumps([{"report_url": extra}]))
+    before = (index.read_bytes(), latest.read_bytes())
+    checked = []
+    def head(key, *args):
+        checked.append(key)
+        return not key.endswith("not-in-index.html")
+    monkeypatch.setattr(gate, "_r2_object_exists", head)
+    assert gate.main() == 1
+    assert "reports/2026/11/not-in-index.html" in checked
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_historical_missing_report_never_auto_purged(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    gate.FEED_PATH.write_text("[]")
+    before = (index.read_bytes(), latest.read_bytes())
+    monkeypatch.setattr(gate, "_r2_object_exists", lambda *args: False)
+    assert gate.main() == 1
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_missing_account_configuration_fails_closed(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    monkeypatch.delenv("CF_ACCOUNT_ID")
+    before = (index.read_bytes(), latest.read_bytes())
+    assert gate.main() == 2
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_missing_reports_credentials_fails_closed(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    monkeypatch.delenv("CF_R2_REPORTS_KEY_ID")
+    monkeypatch.delenv("CF_R2_REPORTS_SECRET_KEY")
+    before = (index.read_bytes(), latest.read_bytes())
+    assert gate.main() == 2
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_corrupt_index_fails_closed(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    index.write_text("{invalid")
+    before = (index.read_bytes(), latest.read_bytes())
+    assert gate.main() == 2
+    assert (index.read_bytes(), latest.read_bytes()) == before
