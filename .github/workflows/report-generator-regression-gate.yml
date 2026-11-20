@@ -183,8 +183,12 @@ jobs:
           node render-test/verify_ai_threat_feed.js
           node render-test/verify_threat_map_chrome_render.js .
 
-      - name: Run homepage ticker, SOC context and APT evidence regressions (offline)
-        run: node --test tests/latest-advisory-ticker.test.cjs tests/top-threat-context.test.cjs workers/intel-gateway/src/__tests__/apt-contract.test.js
+      - name: Run homepage, checkout XSS, Mesh admission, SOC and APT regressions (offline)
+        run: |
+          node --test tests/latest-advisory-ticker.test.cjs tests/top-threat-context.test.cjs \
+            tests/landing-dom-xss.test.cjs \
+            workers/intel-gateway/src/__tests__/apt-contract.test.js \
+            workers/intel-gateway/src/__tests__/apex-mesh-boundary.test.js
 
       - name: Scan malware customer release Python surfaces
         run: |
@@ -208,9 +212,13 @@ jobs:
         run: |
           python -m bandit scripts/apex_attribution_engine_v2.py --severity-level medium --confidence-level medium
 
-      - name: P0 R2 integrity release fence and authenticated HEAD negative controls
+      - name: P0 R2 delivery integrity, fail-closed retirement and regression controls
         run: |
-          python -m pytest tests/test_p0_r2_integrity_release_fence.py -v --tb=short
+          python -m pytest tests/test_p0_r2_integrity_release_fence.py \
+            tests/test_r2_integrity_head_tristate.py \
+            tests/test_r2_report_publisher_bounded_io.py \
+            tests/test_r2_retired_report_validation_state.py \
+            tests/test_report_registry_single_writer.py -v --tb=short
 
       - name: P0 R2 verifier security scan
         run: |
