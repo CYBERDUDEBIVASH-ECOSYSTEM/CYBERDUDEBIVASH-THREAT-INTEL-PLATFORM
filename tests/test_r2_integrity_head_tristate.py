@@ -271,3 +271,36 @@ def test_external_report_url_blocks_before_paid_head(monkeypatch, tmp_path):
     monkeypatch.setattr(gate, "_r2_object_exists", forbid)
     assert gate.main() == 2
     assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+@pytest.mark.parametrize("condition, status", [
+    ("missing_account", "BLOCKED_NO_ACCOUNT_ID"),
+    ("missing_credentials", "BLOCKED_NO_CREDENTIALS"),
+    ("missing_index", "BLOCKED_NO_INDEX"),
+    ("invalid_index", "BLOCKED_READ_INDEX"),
+    ("empty_index", "BLOCKED_EMPTY_INDEX"),
+])
+def test_integrity_prerequisite_failure_exports_blocked_status(
+        monkeypatch, tmp_path, condition, status):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    environment_file = tmp_path / "github-env"
+    monkeypatch.setenv("GITHUB_ENV", str(environment_file))
+    if condition == "missing_account":
+        monkeypatch.delenv("CF_ACCOUNT_ID")
+    elif condition == "missing_credentials":
+        monkeypatch.delenv("CF_R2_REPORTS_KEY_ID")
+        monkeypatch.delenv("CF_R2_REPORTS_SECRET_KEY")
+    elif condition == "missing_index":
+        index.unlink()
+    elif condition == "invalid_index":
+        index.write_text("{invalid json")
+    elif condition == "empty_index":
+        index.write_text(json.dumps({"reports": []}))
+
+    def forbid(*args):
+        raise AssertionError("Invalid precondition must block before paid R2 HEAD")
+    monkeypatch.setattr(gate, "_r2_object_exists", forbid)
+    assert gate.main() == 2
+    exported = environment_file.read_text(encoding="utf-8")
+    assert f"R2_REPORTS_INTEGRITY_STATUS={status}" in exported
+    assert "SKIP_" not in exported
