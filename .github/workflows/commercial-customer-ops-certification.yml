@@ -1073,6 +1073,7 @@ jobs:
           FAIL=0
           FIRST_429=0
           RETRY_AFTER_SEEN=""
+          FIRST_429_CLASS=""
 
           # NOTE: the first attempt at this test used /api/feed, which
           # carries `Cache-Control: public, max-age=120` -- Cloudflare's
@@ -1104,6 +1105,7 @@ jobs:
           burst() {
             FIRST_429=0
             RETRY_AFTER_SEEN=""
+            FIRST_429_CLASS=""
             STATUSES=""
             for i in $(seq 1 33); do
               RESP=$(curl -sS --max-time 15 -D - -o /dev/null "$BASE/api/sla/status")
@@ -1113,6 +1115,15 @@ jobs:
               if [ "$ST" = "429" ] && [ "$FIRST_429" -eq 0 ]; then
                 FIRST_429=$i
                 RETRY_AFTER_SEEN=$(echo "$RESP" | grep -i '^retry-after:' | tr -d '\r' || true)
+                # Distinguish the independent daily quota from the 30/min rate gate.
+                # Only header names are inspected; never print customer identifiers.
+                if echo "$RESP" | grep -iq '^x-dailylimit-limit:'; then
+                  FIRST_429_CLASS="daily_quota"
+                elif echo "$RESP" | grep -iq '^x-ratelimit-limit:'; then
+                  FIRST_429_CLASS="minute_rate"
+                else
+                  FIRST_429_CLASS="unclassified"
+                fi
               fi
             done
             echo "burst statuses (status x count): $(echo $STATUSES | tr ' ' '\n' | sort | uniq -c | awk '{printf "%sx%s ", $2, $1}')"
@@ -1125,11 +1136,15 @@ jobs:
             burst
           fi
 
-          if [ "$FIRST_429" -ge 31 ] && [ "$FIRST_429" -le 33 ]; then
+          echo "first 429 classification: ${FIRST_429_CLASS:-not_observed}"
+          if [ "$FIRST_429_CLASS" = "daily_quota" ]; then
+            echo "::error::P0_DAILY_QUOTA_INTERFERENCE: the shared anonymous caller exhausted its independent daily budget; this run cannot certify the 30/min rate boundary. Use an isolated authorized test identity."
+            FAIL=1
+          elif [ "$FIRST_429" -ge 31 ] && [ "$FIRST_429" -le 33 ] && [ "$FIRST_429_CLASS" = "minute_rate" ]; then
             echo "PASS: FREE tier (limit 30/min) started returning 429 at request #$FIRST_429"
           else
             echo "FAIL: expected the 31st-33rd request to be the first 429, first 429 was at request #$FIRST_429 (0 = never seen)"
-            echo "::error::P0_RATE_AUTHORITY_NOT_ENFORCING: production strong rate authority is approved and must deny the first request above the FREE 30/min boundary. A missing 429 is a release-blocking enforcement defect."
+            echo "::error::P0_RATE_BOUNDARY_UNVERIFIED: expected a minute-rate 429 at request 31-33, but the observed rejection did not establish this boundary."
             FAIL=1
           fi
 
