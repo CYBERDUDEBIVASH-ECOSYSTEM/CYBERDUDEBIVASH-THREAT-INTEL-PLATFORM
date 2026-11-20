@@ -252,7 +252,7 @@ def main() -> int:
         index_data = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
     except Exception as exc:
         log.error("R2 integrity BLOCKED: cannot read api/reports/index.json (%s)", type(exc).__name__)
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "ERROR_READ_INDEX")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_READ_INDEX")
         return 2
 
     if (not isinstance(index_data, dict)
