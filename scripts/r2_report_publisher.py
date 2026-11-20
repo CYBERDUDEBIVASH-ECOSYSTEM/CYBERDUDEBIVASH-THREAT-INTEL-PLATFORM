@@ -616,11 +616,10 @@ def execute_plan(
             # just until the next run.
             for intel_id, snapshot in _pre_clear_snapshot.items():
                 state_items[intel_id] = snapshot
-            log.warning(
+            log.error(
                 "%d manifest(s) failed to write while clearing retired report URLs: %s -- "
-                "restored %d id(s) to pending-retirement state so the next run retries the "
-                "full retirement (delete + manifest clear) for all of them; non-fatal, "
-                "publish-state save below still proceeds.",
+                "restored %d id(s) to pending-retirement state for retry. "
+                "Release BLOCKED; publish-state checkpoint must persist before exit.",
                 len(failed_manifests), ", ".join(str(p) for p in failed_manifests),
                 len(_pre_clear_snapshot),
             )
