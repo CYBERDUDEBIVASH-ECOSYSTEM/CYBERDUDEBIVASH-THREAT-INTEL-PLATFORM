@@ -35,7 +35,7 @@ ZERO FABRICATION  -  reads existing pipeline output and feed.json only.
 ADDITIVE ONLY    -  modifies no existing file except writing p26_certification_report.json
 """
 from __future__ import annotations
-import json, pathlib, sys, datetime, os, re, subprocess, ast
+import json, pathlib, sys, datetime, os, re, subprocess, ast, math
 
 _ROOT    = pathlib.Path(__file__).resolve().parent.parent
 _QUALITY = _ROOT / "data" / "quality"
@@ -169,8 +169,24 @@ def _a4_quality_audit(items: list) -> dict:
 
     enrich_scores = [float(i.get("enrichment_score") or 0) for i in items]
     avg_enrich    = sum(enrich_scores) / len(enrich_scores) if enrich_scores else 0
-    confidence    = [float(i.get("confidence") or 0) for i in items]
-    avg_conf      = sum(confidence) / len(confidence) if confidence else 0
+    # The feed's item.confidence contract is a 0..1 fraction, not 0..100.
+    # A percentage-point value, NaN or malformed number must not be silently
+    # rendered as a plausible customer trust percentage or certified as green.
+    confidence = []
+    invalid_confidence_count = 0
+    for item in items:
+        try:
+            value = float(item.get("confidence") or 0)
+        except (TypeError, ValueError, OverflowError):
+            invalid_confidence_count += 1
+            continue
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            invalid_confidence_count += 1
+            continue
+        confidence.append(value)
+    avg_conf = sum(confidence) / len(confidence) if confidence else 0
+    confidence_display = (f"{avg_conf:.1%}" if not invalid_confidence_count
+                          else "UNVERIFIED (out-of-range source confidence)")
 
     # Load P21 report if available
     p21 = _load_json(_QUALITY / "p21_certification_report.json") or {}
@@ -179,13 +195,15 @@ def _a4_quality_audit(items: list) -> dict:
     return {
         "items":               len(items),
         "average_enrichment":  round(avg_enrich, 1),
-        "average_confidence":  f"{avg_conf:.1%}",
+        "average_confidence":  confidence_display,
+        "invalid_confidence_count": invalid_confidence_count,
         "p21_avg_score":       p21.get("average_score", "N/A (report not generated)"),
         "p21_premium_cert":    p21.get("level_distribution", {}).get("PREMIUM_CERTIFIED", "N/A"),
         "p24_release_tier":    p24.get("release_tier", "N/A (not generated)"),
         "p24_score":           p24.get("overall_pct", "N/A"),
-        "passed":              avg_enrich >= 30,
-        "notes":               f"Avg enrichment: {avg_enrich:.1f}/100 | Avg confidence: {avg_conf:.1%}",
+        "passed":              avg_enrich >= 30 and invalid_confidence_count == 0,
+        "notes":               (f"Avg enrichment: {avg_enrich:.1f}/100 | Avg confidence: "
+                                f"{confidence_display} | Invalid confidence: {invalid_confidence_count}"),
     }
 
 
@@ -343,7 +361,7 @@ def _a10_regression_status() -> dict:
             "tests_passed": passed,
             "tests_failed": failed,
             "exit_code":    result.returncode,
-            "passed":       result.returncode == 0,
+            "passed":       result.returncode == 0 and passed > 0 and failed == 0,
             "notes":        f"Regression suite: {passed} PASS, {failed} FAIL",
             "output_tail":  output.strip().splitlines()[-5:],
         }
@@ -481,7 +499,7 @@ def _a13_worldwide_release(audits: dict, items: list) -> dict:
     # Check each audit dimension
     for code, result in audits.items():
         if not result.get("passed"):
-            if code in ("A1", "A3", "A8"):  # Critical
+            if code in ("A1", "A3", "A4", "A8", "A10"):  # Critical: data truth and regression evidence
                 blockers.append(f"{code}: {result.get('notes','')}")
             else:
                 warnings.append(f"{code}: {result.get('notes','')}")
