@@ -235,3 +235,39 @@ def test_head_budget_fails_before_issuing_requests(monkeypatch, tmp_path):
     monkeypatch.setattr(gate, "_r2_object_exists", forbidden)
     assert gate.main() == 2
     assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+@pytest.mark.parametrize("report_url, expected", [
+    ("/reports/2026/11/intel--a.html", "reports/2026/11/intel--a.html"),
+    ("reports/2026/11/intel--a.html", "reports/2026/11/intel--a.html"),
+    ("https://intel.cyberdudebivash.com/reports/2026/11/intel--a.html",
+     "reports/2026/11/intel--a.html"),
+    ("https://evil.example/reports/2026/11/intel--a.html", None),
+    ("http://intel.cyberdudebivash.com/reports/2026/11/intel--a.html", None),
+    ("https://intel.cyberdudebivash.com.evil.example/reports/2026/11/intel--a.html", None),
+    ("https://user:pass@intel.cyberdudebivash.com/reports/2026/11/intel--a.html", None),
+    ("https://intel.cyberdudebivash.com:444/reports/2026/11/intel--a.html", None),
+    ("//evil.example/reports/2026/11/intel--a.html", None),
+    ("/reports/../secrets.html", None),
+    ("/reports/2026/11/%2e%2e.html", None),
+    ("/reports/2026/11/intel--a.html?debug=1", None),
+    ("/reports/2026/11/intel--a.pdf", None),
+    ("/notreports/2026/11/intel--a.html", None),
+    ("", None),
+])
+def test_report_url_key_mapping_enforces_first_party_boundary(report_url, expected):
+    assert gate._path_to_r2_key(report_url) == expected
+
+
+def test_external_report_url_blocks_before_paid_head(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    external = "https://evil.example/reports/2026/11/intel--0123456789abcdef.html"
+    item = json.loads(index.read_text())
+    item["reports"][0]["path"] = external
+    index.write_text(json.dumps(item))
+    before = (index.read_bytes(), latest.read_bytes())
+    def forbid(*args):
+        raise AssertionError("External report URLs must fail before any R2 call")
+    monkeypatch.setattr(gate, "_r2_object_exists", forbid)
+    assert gate.main() == 2
+    assert (index.read_bytes(), latest.read_bytes()) == before
