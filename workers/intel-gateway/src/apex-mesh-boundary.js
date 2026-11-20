@@ -1,5 +1,6 @@
 import { evaluateKeyRecordAccess } from './subscription-lifecycle.js';
 import { SWARM_MESH_CAPABILITY, tierAllowsSwarm } from './swarm-access.js';
+import { strongConsistencyEnabled, getStrongAuthState, authStateDenies } from './strong-consistency-authority.js';
 
 const enc = new TextEncoder();
 const MESH_VERSION = 'cdb.mesh.v1';
@@ -147,6 +148,18 @@ async function resolveMeshPrincipal(request, env) {
     if (typeof env?.SECURITY_HUB_KV?.get !== 'function' || typeof env?.API_KEYS_KV?.get !== 'function') {
       throw new MeshAccessError('mesh_auth_service_unavailable', 503);
     }
+    // Canonical resolveAuth() consults this authority first when enabled.
+    // Mesh admission must not reserve compute against a revoked customer
+    // while eventually-consistent KV still shows an earlier active state.
+    if (strongConsistencyEnabled(env)) {
+      try {
+        const customerState = await getStrongAuthState(env, `customer:${sub}`);
+        if (authStateDenies(customerState)) throw new MeshAccessError('mesh_subscription_denied', 403);
+      } catch (error) {
+        if (error instanceof MeshAccessError) throw error;
+        throw new MeshAccessError('mesh_auth_service_unavailable', 503);
+      }
+    }
     try {
       const revoked = await env.SECURITY_HUB_KV?.get(`jwt_revoked:${raw.slice(-24)}`);
       if (revoked) throw new MeshAccessError('mesh_token_revoked', 401);
@@ -173,7 +186,27 @@ async function resolveMeshPrincipal(request, env) {
   }
   if (!record || typeof record !== 'object') throw new MeshAccessError('mesh_auth_invalid', 401);
 
-  const access = evaluateKeyRecordAccess(record);
+  let effectiveRecord = record;
+  if (strongConsistencyEnabled(env)) {
+    try {
+      const [keyState, customerState] = await Promise.all([
+        getStrongAuthState(env, `key:${raw}`),
+        record.customer_id
+          ? getStrongAuthState(env, `customer:${record.customer_id}`)
+          : Promise.resolve(null),
+      ]);
+      if (authStateDenies(keyState) || authStateDenies(customerState)) {
+        throw new MeshAccessError('mesh_subscription_denied', 403);
+      }
+      // Match canonical resolveAuth(): a strongly reactivated customer
+      // is not held hostage by a stale KV subscription_status field.
+      if (customerState) effectiveRecord = { ...record, subscription_status: customerState.status };
+    } catch (error) {
+      if (error instanceof MeshAccessError) throw error;
+      throw new MeshAccessError('mesh_auth_service_unavailable', 503);
+    }
+  }
+  const access = evaluateKeyRecordAccess(effectiveRecord);
   if (!access.allowed) throw new MeshAccessError(access.error || 'mesh_subscription_denied', 403);
   const sub = String(record.customer_id || raw.slice(0, 8));
   if (!sub) throw new MeshAccessError('mesh_auth_invalid', 401);
