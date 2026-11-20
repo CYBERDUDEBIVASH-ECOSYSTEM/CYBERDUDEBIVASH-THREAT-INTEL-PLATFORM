@@ -240,7 +240,13 @@ def _a7_ioc_audit(items: list) -> dict:
     hardened_ioc_items = 0
     for i in items:
         iocs = i.get("iocs") or []
-        if any(ioc.get("p20_hardened") for ioc in iocs):
+        # Legacy IOC arrays may contain bare indicator strings. Only an
+        # explicitly marked structured IOC is evidence of P20 hardening.
+        # Do not mark strings or malformed values as hardened or discard them.
+        if isinstance(iocs, list) and any(
+            isinstance(ioc, dict) and ioc.get("p20_hardened") is True
+            for ioc in iocs
+        ):
             hardened_ioc_items += 1
 
     n = max(len(items), 1)
