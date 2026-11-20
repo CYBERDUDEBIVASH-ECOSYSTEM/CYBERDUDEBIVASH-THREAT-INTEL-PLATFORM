@@ -99,17 +99,38 @@ def _get_credentials() -> Tuple[str, str, str, str, str]:
 
 
 def _path_to_r2_key(path_or_url: str) -> Optional[str]:
+    """Return an owned, normalized report object key or None.
+
+    A third-party URL with a matching /reports/... path is NOT evidence of a
+    first-party customer report.  Reject malformed, encoded, traversal, or
+    non-HTML references instead of sending HEAD to an unintended object key.
     """
-    Convert a report path (/reports/2026/06/intel--xxx.html) or full URL to
-    the R2 key used in sentinel-apex-reports (reports/2026/06/intel--xxx.html).
-    """
-    if not path_or_url:
+    if not isinstance(path_or_url, str) or not path_or_url:
         return None
-    if path_or_url.startswith("http"):
-        parsed = urlparse(path_or_url)
+    if path_or_url.startswith("https://"):
+        try:
+            parsed = urlparse(path_or_url)
+            if (parsed.scheme != "https"
+                    or parsed.hostname != "intel.cyberdudebivash.com"
+                    or parsed.port not in (None, 443)
+                    or parsed.username or parsed.password
+                    or parsed.query or parsed.fragment):
+                return None
+        except ValueError:
+            return None
         path_or_url = parsed.path
+    elif ("://" in path_or_url or path_or_url.startswith("//")
+          or "?" in path_or_url or "#" in path_or_url):
+        return None
+
     key = path_or_url.lstrip("/")
-    return key if key.startswith("reports/") else None
+    parts = key.split("/")
+    if (len(parts) < 3 or parts[0] != "reports"
+            or not key.endswith(".html")
+            or any(p in ("", ".", "..") for p in parts)
+            or any(c in key for c in ("\\", "%", "\\x00", "\\r", "\\n"))):
+        return None
+    return key
 
 
 def _r2_object_exists(
