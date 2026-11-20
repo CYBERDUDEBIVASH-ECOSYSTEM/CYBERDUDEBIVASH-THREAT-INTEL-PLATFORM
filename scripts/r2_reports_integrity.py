@@ -128,7 +128,8 @@ def _path_to_r2_key(path_or_url: str) -> Optional[str]:
     if (len(parts) < 3 or parts[0] != "reports"
             or not key.endswith(".html")
             or any(p in ("", ".", "..") for p in parts)
-            or any(c in key for c in ("\\", "%", "\\x00", "\\r", "\\n"))):
+            or any(c in key for c in ("\\", "%"))
+            or any(ord(c) < 32 or ord(c) == 127 for c in key)):
         return None
     return key
 
