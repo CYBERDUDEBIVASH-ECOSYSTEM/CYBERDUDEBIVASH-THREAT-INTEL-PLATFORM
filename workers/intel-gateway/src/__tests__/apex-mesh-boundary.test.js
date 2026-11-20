@@ -191,6 +191,88 @@ test('Mesh JWT fails closed when revocation or billing authority is unavailable'
   }
 });
 
+function strongAuthAuthority(status = 'active', unavailable = false) {
+  let reads = 0;
+  const binding = {
+    idFromName(name) { return name; },
+    get() {
+      return {
+        async fetch() {
+          reads++;
+          if (unavailable) throw new Error('strong authority unavailable');
+          return Response.json({ ok: true, state: { status } });
+        },
+      };
+    },
+  };
+  return { binding, get reads() { return reads; } };
+}
+
+test('strongly suspended customer JWT is rejected before private Mesh compute', async () => {
+  const secret = 'j'.repeat(64);
+  const now = Math.floor(Date.now() / 1000);
+  const token = jwtFor({ iss: 'SENTINEL-APEX', sub: 'cust-suspended',
+    tier: 'PRO', iat: now - 30, exp: now + 3600 }, secret);
+  const authority = strongAuthAuthority('suspended');
+  const fixture = envFor();
+  fixture.env.CDB_JWT_SECRET = secret;
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'true';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = authority.binding;
+  const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ioc_value: '8.8.8.8' }),
+  });
+  const result = await beginApexMeshBoundary(req, fixture.env);
+  assert.equal(result.blockedResponse.status, 403);
+  assert.equal((await result.blockedResponse.json()).error, 'mesh_subscription_denied');
+  assert.equal(authority.reads, 1);
+  assert.equal(fixture.calls.length, 0);
+});
+
+test('strongly revoked API key is rejected before Mesh admission', async () => {
+  const fixture = envFor();
+  const authority = strongAuthAuthority('revoked');
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'true';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = authority.binding;
+  const result = await beginApexMeshBoundary(request('strong-deny'), fixture.env);
+  assert.equal(result.blockedResponse.status, 403);
+  assert.equal((await result.blockedResponse.json()).error, 'mesh_subscription_denied');
+  assert.equal(authority.reads, 2);
+  assert.equal(fixture.calls.length, 0);
+});
+
+test('strongly reactivated customer overrides eventually-consistent stale KV status', async () => {
+  const fixture = envFor({ tier: 'PRO', customer_id: 'cust-1',
+    subscription_status: 'suspended' });
+  const authority = strongAuthAuthority('active');
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'true';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = authority.binding;
+  const result = await beginApexMeshBoundary(request('strong-reactivated'), fixture.env);
+  assert.ok(result.session, 'strong customer authority must override stale KV status');
+  assert.equal(authority.reads, 2);
+  assert.equal(fixture.calls.length, 1);
+});
+
+test('strong authority outage rejects admission rather than falling back to KV', async () => {
+  const fixture = envFor();
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'true';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = strongAuthAuthority('active', true).binding;
+  const result = await beginApexMeshBoundary(request('strong-unavailable'), fixture.env);
+  assert.equal(result.blockedResponse.status, 503);
+  assert.equal((await result.blockedResponse.json()).error, 'mesh_auth_service_unavailable');
+  assert.equal(fixture.calls.length, 0);
+});
+
+test('strong authority remains zero-spend on default disabled flag', async () => {
+  const fixture = envFor();
+  const authority = strongAuthAuthority('suspended');
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'false';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = authority.binding;
+  const result = await beginApexMeshBoundary(request('strong-off'), fixture.env);
+  assert.ok(result.session);
+  assert.equal(authority.reads, 0, 'disabled control must not make a paid Durable Object request');
+});
+
 test('FREE credentials are rejected before a mesh reservation', async () => {
   const fixture = envFor({ tier: 'FREE', customer_id: 'free-1', subscription_status: 'active' });
   const result = await beginApexMeshBoundary(request('free-denied'), fixture.env);
