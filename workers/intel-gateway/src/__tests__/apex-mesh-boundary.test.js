@@ -96,7 +96,9 @@ function jwtFor(payload, secret) {
 
 test('billing refund deny marker invalidates an already-issued mesh JWT immediately', async () => {
   const secret = 'j'.repeat(64);
-  const token = jwtFor({ sub: 'cust-refunded', tier: 'PRO', exp: Math.floor(Date.now() / 1000) + 3600 }, secret);
+  const now = Math.floor(Date.now() / 1000);
+  const token = jwtFor({ iss: 'SENTINEL-APEX', sub: 'cust-refunded', tier: 'PRO',
+    iat: now - 30, exp: now + 3600 }, secret);
   const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Request-ID': 'jwt-refund-deny' },
@@ -108,6 +110,85 @@ test('billing refund deny marker invalidates an already-issued mesh JWT immediat
     API_KEYS_KV: { async get(key) { return key === 'jwt_deny:cust-refunded' ? '{"reason":"refunded"}' : null; } },
   };
   await assert.rejects(() => __test.resolveMeshPrincipal(req, env), (err) => err?.code === 'mesh_subscription_denied' && err?.status === 403);
+});
+
+
+test('Mesh accepts canonical unexpired audience-free login JWTs', async () => {
+  const secret = 'j'.repeat(64);
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { iss: 'SENTINEL-APEX', sub: 'cust-real', tier: 'PRO',
+    iat: now - 60, exp: now + 3600 };
+  const token = jwtFor(payload, secret);
+  assert.deepEqual(await __test.verifyJwtHs256(token, secret), payload);
+  const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ioc_value: '8.8.8.8' }),
+  });
+  const env = {
+    CDB_JWT_SECRET: secret,
+    SECURITY_HUB_KV: { async get() { return null; } },
+    API_KEYS_KV: { async get() { return null; } },
+  };
+  assert.deepEqual(await __test.resolveMeshPrincipal(req, env),
+    { sub: 'cust-real', tier: 'PRO', source: 'jwt' });
+});
+
+test('Mesh rejects non-general-audience, unbounded and malformed JWTs before admission', async () => {
+  const secret = 'j'.repeat(64);
+  const now = Math.floor(Date.now() / 1000);
+  const base = { iss: 'SENTINEL-APEX', sub: 'cust-real', tier: 'PRO',
+    iat: now - 60, exp: now + 3600 };
+  const invalid = [
+    { ...base, aud: 'cdb-watchdog' },
+    { ...base, aud: ['some-other-app'] },
+    { ...base, iss: 'cdb-apex-mesh' },
+    { ...base, iss: 'evil' },
+    { ...base, iss: undefined },
+    { ...base, exp: undefined },
+    { ...base, exp: now - 1 },
+    { ...base, exp: now },
+    { ...base, exp: String(now + 3600) },
+    { ...base, iat: undefined },
+    { ...base, iat: now + 120 },
+    { ...base, exp: now + 86402 },
+  ];
+  for (const payload of invalid) {
+    const token = jwtFor(payload, secret);
+    assert.equal(await __test.verifyJwtHs256(token, secret), null, JSON.stringify(payload));
+  }
+  assert.equal(await __test.verifyJwtHs256('x'.repeat(8193), secret), null);
+  const token = jwtFor({ ...base, aud: 'cdb-watchdog' }, secret);
+  let reads = 0;
+  const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ioc_value: '8.8.8.8' }),
+  });
+  const env = {
+    CDB_JWT_SECRET: secret,
+    SECURITY_HUB_KV: { async get() { reads++; return null; } },
+    API_KEYS_KV: { async get() { reads++; return null; } },
+  };
+  const result = await beginApexMeshBoundary(req, env);
+  assert.equal(result.blockedResponse.status, 401);
+  assert.equal(reads, 0, 'invalid token must not spend a remote key-value read');
+});
+
+test('Mesh JWT fails closed when revocation or billing authority is unavailable', async () => {
+  const secret = 'j'.repeat(64);
+  const now = Math.floor(Date.now() / 1000);
+  const token = jwtFor({ iss: 'SENTINEL-APEX', sub: 'cust-real', tier: 'PRO',
+    iat: now - 30, exp: now + 3600 }, secret);
+  const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ioc_value: '8.8.8.8' }),
+  });
+  for (const env of [
+    { CDB_JWT_SECRET: secret, API_KEYS_KV: { async get() { return null; } } },
+    { CDB_JWT_SECRET: secret, SECURITY_HUB_KV: { async get() { return null; } } },
+  ]) {
+    await assert.rejects(() => __test.resolveMeshPrincipal(req, env),
+      err => err?.code === 'mesh_auth_service_unavailable' && err?.status === 503);
+  }
 });
 
 test('FREE credentials are rejected before a mesh reservation', async () => {
