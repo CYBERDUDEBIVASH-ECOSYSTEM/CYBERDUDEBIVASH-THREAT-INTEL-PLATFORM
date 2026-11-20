@@ -6,35 +6,14 @@ CYBERDUDEBIVASH(R) SENTINEL APEX v1.0 -- R2 Reports Index Integrity Gate
 STAGE 3.5.1: Executed immediately after r2_upload.py (Stage 3.5).
 
 PURPOSE:
-  1. Verifies that current-run HTML reports were successfully uploaded to
-     the sentinel-apex-reports R2 bucket.
-  2. Purges stale entries from api/reports/index.json (entries that exist
-     in the index but have no corresponding HTML in R2 sentinel-apex-reports).
-  3. Re-uploads the cleaned api/reports/index.json to R2 sentinel-apex-data.
-
-ROOT CAUSE FIX:
-  r2_upload.py (Stage 3.5) treats HTML report upload as non-fatal -- it exits 0
-  even when the upload to sentinel-apex-reports fails (credential issue, timeout,
-  network error). The api/reports/index.json therefore accumulates ghost entries
-  pointing to report URLs that do not exist in R2. Users who click these links
-  receive a 404 JSON error from the Cloudflare Worker.
-
-  This script detects and eliminates ghost entries, ensuring every entry in the
-  published index points to an HTML file that actually exists in R2.
-
-HARD FAIL condition:
-  ALL current-run report URLs (derived from api/feed.json report_url fields) are
-  missing from sentinel-apex-reports. This indicates the upload mechanism itself
-  is broken (wrong credentials, missing bucket, permission denied). The pipeline
-  must not publish a report index filled with 404 links.
-
-NON-FATAL condition:
-  Some historical index entries are missing from R2 (older runs with silent upload
-  failures). These are purged and the pipeline continues cleanly.
+  Read-only, bounded, fail-closed HEAD verification of customer report URLs.
+  No customer catalog mutation or R2 PUT/DELETE occurs in main().
 
 EXIT CODES:
-  0 -- OK (index is clean, or stale entries were purged and index re-uploaded)
-  1 -- HARD FAIL (current-run reports ALL missing from R2 -- upload broken)
+  0 -- All checked report objects confirmed present (not a full-history audit).
+  1 -- At least one checked object confirmed missing.
+  2 -- Missing/invalid catalog, invalid credentials, exhausted HEAD budget,
+       or indeterminate R2 request. Never represent unknown as 404.
 
 ENVIRONMENT (consumed):
   CF_ACCOUNT_ID            -- Cloudflare account ID
@@ -75,7 +54,8 @@ FEED_PATH       = REPO / "api" / "feed.json"
 BUCKET_REPORTS  = "sentinel-apex-reports"
 BUCKET_DATA     = "sentinel-apex-data"
 MAX_WORKERS     = 20          # Parallel S3 head-object workers
-MAX_CHECK       = 200         # Max index entries to verify (limits runtime)
+MAX_CHECK       = 200         # Max recent index entries to verify
+MAX_TOTAL_HEAD  = 400         # Max total unique keys, including feed/latest
 CHECK_TIMEOUT   = 15          # Per-request timeout (seconds)
 R2_S3_REGION   = "auto"      # Cloudflare R2-only; never inherit global AWS region
 
@@ -253,7 +233,13 @@ def main() -> int:
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "ERROR_READ_INDEX")
         return 2
 
-    all_entries: List[dict] = index_data.get("reports", [])
+    if (not isinstance(index_data, dict)
+            or not isinstance(index_data.get("reports"), list)
+            or any(not isinstance(e, dict) for e in index_data["reports"])):
+        log.error("Index schema invalid: expected reports array of objects")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_INDEX_SCHEMA")
+        return 2
+    all_entries: List[dict] = index_data["reports"]
     if not all_entries:
         log.info("Index has no entries -- nothing to verify")
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "OK_EMPTY_INDEX")
@@ -261,21 +247,37 @@ def main() -> int:
 
     log.info("Index entries: %d total", len(all_entries))
 
-    # --- Identify current-run report keys from api/feed.json ---
+    # --- Canonical feed is mandatory; no silent empty fallback ---
+    if not FEED_PATH.exists():
+        log.error("Required feed missing")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_MISSING_FEED")
+        return 2
+    try:
+        feed = json.loads(FEED_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        log.error("Required feed unreadable or malformed")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_INVALID_FEED")
+        return 2
+    if not isinstance(feed, list) or any(not isinstance(e, dict) for e in feed):
+        log.error("Required feed schema invalid")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_FEED_SCHEMA")
+        return 2
     current_run_keys: Set[str] = set()
-    if FEED_PATH.exists():
-        try:
-            feed = json.loads(FEED_PATH.read_text(encoding="utf-8"))
-            items = feed if isinstance(feed, list) else []
-            for item in items:
-                ru = item.get("report_url", "")
-                if ru:
-                    key = _path_to_r2_key(ru)
-                    if key:
-                        current_run_keys.add(key)
-            log.info("Current-run report URLs: %d (from api/feed.json)", len(current_run_keys))
-        except Exception as exc:
-            log.warning("Could not read api/feed.json: %s (non-fatal)", exc)
+    for item in feed:
+        ru = item.get("report_url")
+        if ru in (None, ""):
+            continue
+        if not isinstance(ru, str):
+            log.error("Feed report_url is not a string")
+            _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_REPORT_URL_SCHEMA")
+            return 2
+        key = _path_to_r2_key(ru)
+        if not key:
+            log.error("Feed report_url cannot be mapped to a report object")
+            _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_REPORT_URL_SCHEMA")
+            return 2
+        current_run_keys.add(key)
+    log.info("Current-run report URLs: %d", len(current_run_keys))
 
     # --- Load latest.json up front (needed both to build the check set below
     #     and to purge it later) so its own entries -- which are not
@@ -285,14 +287,23 @@ def main() -> int:
     #     checked key set at all, so a staleness unique to latest.json
     #     (e.g. after independent drift between the two files) could never
     #     be detected or purged by this gate.
-    latest_data: Optional[dict] = None
-    latest_reports_raw: List[dict] = []
-    if LATEST_PATH.exists():
-        try:
-            latest_data = json.loads(LATEST_PATH.read_text(encoding="utf-8"))
-            latest_reports_raw = latest_data.get("reports", [])
-        except Exception as exc:
-            log.warning("Could not read api/reports/latest.json: %s (non-fatal)", exc)
+    if not LATEST_PATH.exists():
+        log.error("Required latest catalog missing")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_MISSING_LATEST")
+        return 2
+    try:
+        latest_data = json.loads(LATEST_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        log.error("Required latest catalog unreadable or malformed")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_INVALID_LATEST")
+        return 2
+    if (not isinstance(latest_data, dict)
+            or not isinstance(latest_data.get("reports"), list)
+            or any(not isinstance(e, dict) for e in latest_data["reports"])):
+        log.error("Required latest catalog schema invalid")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_LATEST_SCHEMA")
+        return 2
+    latest_reports_raw = latest_data["reports"]
 
     # --- Select entries to check (most recent MAX_CHECK + all current-run) ---
     entries_to_check = all_entries[:MAX_CHECK]
@@ -330,6 +341,10 @@ def main() -> int:
     # Required feed URLs are independently authoritative inputs to the
     # customer delivery gate: verify them even if catalogs are inconsistent.
     all_keys_to_check = sorted(set(entry_key_map) | current_run_keys)
+    if not all_keys_to_check or len(all_keys_to_check) > MAX_TOTAL_HEAD:
+        log.error("HEAD coverage cannot fit budget (%d keys, max %d)", len(all_keys_to_check), MAX_TOTAL_HEAD)
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_HEAD_BUDGET_OR_EMPTY")
+        return 2
     log.info("Dispatching %d parallel R2 head-object checks (workers=%d)...",
              len(all_keys_to_check), MAX_WORKERS)
 
@@ -397,122 +412,14 @@ def main() -> int:
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", f"BLOCKED_MISSING_REPORTS_{len(missing_keys)}")
         return 1
 
-    # --- Purge stale entries from index ---
-    clean_entries: List[dict] = []
-    purged_count = 0
-
-    for entry in all_entries:
-        r2_key = _path_to_r2_key(entry.get("path", "") or entry.get("url", ""))
-        if r2_key and key_exists.get(r2_key) is False:
-            # Confirmed missing from R2 -- purge
-            purged_count += 1
-        else:
-            clean_entries.append(entry)
-
-    index_changed  = False
-    latest_changed = False
-
-    if purged_count > 0:
-        log.info("Purged %d stale entries from api/reports/index.json "
-                 "(had no HTML in R2 sentinel-apex-reports)", purged_count)
-        log.info("Index: %d entries before -> %d entries after purge",
-                 len(all_entries), len(clean_entries))
-
-        # Write back cleaned index. v1.1 FIX: total_reports is reduced by
-        # exactly the purged count so it stays consistent with reports_listed/
-        # reports -- previously it was left untouched after a purge, so a
-        # customer-visible count could silently diverge from what the index
-        # actually lists (F-02 root cause register item).
-        index_data["reports"]         = clean_entries
-        index_data["reports_listed"]  = len(clean_entries)
-        index_data["total_reports"]   = max(0, int(index_data.get("total_reports", 0)) - purged_count)
-        index_data["generated_at"]    = _utc_now()
-
-        try:
-            tmp = INDEX_PATH.with_suffix(".integrity_tmp")
-            tmp.write_text(
-                json.dumps(index_data, indent=2, ensure_ascii=False, default=str),
-                encoding="utf-8",
-            )
-            os.replace(tmp, INDEX_PATH)
-            log.info("OK: api/reports/index.json written with %d clean entries", len(clean_entries))
-            index_changed = True
-        except Exception as exc:
-            log.error("Failed to write cleaned index: %s (non-fatal)", exc)
-    else:
-        log.info("Index is clean -- no stale entries detected in checked range (%d entries)",
-                 len(entries_to_check))
-
-    # v1.1 FIX: latest.json is checked/purged independently of index.json's
-    # purge_count. This used to be nested inside `if purged_count > 0`, so a
-    # run that purged 0 index.json entries never checked latest.json at all --
-    # even when latest.json (the newest-first top-50 subset, most likely to
-    # contain this run's own reports) had its own stale entries missing from
-    # R2. That asymmetry was the direct cause of index.json and latest.json
-    # showing different report counts from the same pipeline run (F-02).
-    if latest_data is not None:
-        try:
-            latest_reports = latest_reports_raw
-            clean_latest = [
-                e for e in latest_reports
-                if _path_to_r2_key(e.get("path", "") or e.get("url", "")) not in missing_keys
-            ]
-            latest_purged = len(latest_reports) - len(clean_latest)
-            if latest_purged > 0:
-                latest_data["reports"]        = clean_latest
-                latest_data["reports_listed"] = len(clean_latest)
-                latest_data["total_reports"]  = max(0, int(latest_data.get("total_reports", 0)) - latest_purged)
-                latest_data["generated_at"]   = _utc_now()
-                tmp2 = LATEST_PATH.with_suffix(".integrity_tmp")
-                tmp2.write_text(
-                    json.dumps(latest_data, indent=2, ensure_ascii=False, default=str),
-                    encoding="utf-8",
-                )
-                os.replace(tmp2, LATEST_PATH)
-                log.info("OK: api/reports/latest.json purged %d stale entries", latest_purged)
-                latest_changed = True
-        except Exception as exc:
-            log.warning("Could not update api/reports/latest.json: %s (non-fatal)", exc)
-
-    # Re-upload whichever cleaned file(s) actually changed to R2 sentinel-apex-data
-    if index_changed or latest_changed:
-        if data_key and data_sec:
-            log.info("Re-uploading cleaned index files to R2 (sentinel-apex-data)...")
-            for rel, local_p, changed in [
-                ("api/reports/index.json",  INDEX_PATH,  index_changed),
-                ("api/reports/latest.json", LATEST_PATH, latest_changed),
-            ]:
-                if changed and local_p.exists():
-                    _s3_cp(str(local_p), BUCKET_DATA, rel, endpoint, data_key, data_sec)
-        else:
-            log.warning("WARN: No data bucket credentials -- cannot re-upload cleaned index to R2")
-
-    # --- Determine exit status ---
-    # HARD FAIL only when ALL current-run reports are missing from R2.
-    # This means the upload mechanism itself is broken (credentials, bucket, etc.).
-    # A partial failure (some historical entries missing) is non-fatal after purge.
-    # Partial current-run failure (some missing, some present) -- warn but continue
-    if current_missing:
-        log.warning("WARN: %d/%d current-run reports missing from R2 (partial upload failure)",
-                    len(current_missing), len(current_run_keys))
-
-    status = (
-        f"OK_purged={purged_count}"
-        f"_checked={len(key_exists)}"
-        f"_clean={len(clean_entries)}"
-    )
+    # Verification is deliberately read-only. Missing/unverifiable keys
+    # have already caused a nonzero return; never silently rewrite catalogs.
+    unchecked_index = max(0, len(all_entries) - len(entries_to_check))
+    status = f"OK_checked={len(key_exists)}_unchecked_history={unchecked_index}"
     _write_github_env("R2_REPORTS_INTEGRITY_STATUS", status)
-
-    log.info("=" * 70)
-    log.info("INTEGRITY GATE COMPLETE")
-    log.info("  Entries checked  : %d", len(key_exists))
-    log.info("  Present in R2    : %d", len(present_keys))
-    log.info("  Missing (purged) : %d", purged_count)
-    log.info("  Index remaining  : %d", len(clean_entries))
-    log.info("  Status           : %s", status)
-    log.info("=" * 70)
+    log.info("READ-ONLY integrity gate complete: %d present; %d historical index entries not checked",
+             len(present_keys), unchecked_index)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
