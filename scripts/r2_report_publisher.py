@@ -596,6 +596,10 @@ def execute_plan(
 
         failed_manifests = clear_report_urls(html_ids=cleared_html_ids, pdf_ids=cleared_pdf_ids)
         if failed_manifests:
+            # Caller must fail publication AFTER persistently checkpointing the
+            # restored retirement retry state. This ephemeral marker is removed
+            # by main() before writing the state file.
+            state["_p0_manifest_reconciliation_failed"] = True
             # Cannot tell from here which specific ids live in the manifest(s)
             # that failed to write -- restoring the WHOLE batch (rather than
             # guessing) means the next run's retirement pass reconsiders
@@ -791,18 +795,24 @@ def main() -> int:
         put_ops, delete_ops, state, endpoint,
         deadline_monotonic=time.monotonic() + stage_budget_seconds,
     )
+    # Reconciliation failure must not be persisted as an unrecognized schema
+    # field, but restored retry entries must be checkpointed before exit.
+    reconciliation_failed = bool(state.pop("_p0_manifest_reconciliation_failed", False))
     save_publish_state(state)
 
     log.info("Publish complete: PUT %d/%d ok, DELETE %d/%d ok.",
              put_ok, len(put_ops), delete_ok, len(delete_ops))
-    if put_ok != len(put_ops) or delete_ok != len(delete_ops):
+    if put_ok != len(put_ops) or delete_ok != len(delete_ops) or reconciliation_failed:
         # Do not mark a partially published customer report plan as PASS.
         # Successful objects remain tracked for bounded retry next cycle;
         # STAGE 3.5.1 independently verifies link existence.
         log.error("Report publication incomplete: PUT %d/%d, DELETE %d/%d.",
                   put_ok, len(put_ops), delete_ok, len(delete_ops))
+        if reconciliation_failed:
+            log.error("Report retirement manifest reconciliation FAILED; state checkpointed, release blocked")
         emit_summary(plan, budgets, status="BLOCKED", is_report_plan=True,
-                     extra={"reason": "incomplete_r2_report_operations",
+                     extra={"reason": ("retirement_manifest_reconciliation_failed"
+                                       if reconciliation_failed else "incomplete_r2_report_operations"),
                             "put_success": put_ok, "put_planned": len(put_ops),
                             "delete_success": delete_ok, "delete_planned": len(delete_ops)})
         return 1
