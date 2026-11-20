@@ -222,18 +222,19 @@ def main() -> int:
     log.info("R2 REPORTS INDEX INTEGRITY GATE v1.0  --  STAGE 3.5.1")
     log.info("=" * 70)
 
+    # Production integrity is mandatory; missing configuration is never success.
     # --- Credentials ---
     cf_account, reports_key, reports_sec, data_key, data_sec = _get_credentials()
 
     if not cf_account:
         log.warning("CF_ACCOUNT_ID not set -- skipping R2 integrity check (non-fatal)")
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "SKIP_NO_ACCOUNT_ID")
-        return 0
+        return 2
 
     if not reports_key or not reports_sec:
         log.warning("No R2 credentials available -- skipping integrity check (non-fatal)")
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "SKIP_NO_CREDENTIALS")
-        return 0
+        return 2
 
     endpoint = f"https://{cf_account}.r2.cloudflarestorage.com"
     log.info("R2 endpoint : %s", endpoint)
@@ -243,20 +244,20 @@ def main() -> int:
     if not INDEX_PATH.exists():
         log.warning("api/reports/index.json not found -- skipping (non-fatal)")
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "SKIP_NO_INDEX")
-        return 0
+        return 2
 
     try:
         index_data = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
     except Exception as exc:
         log.error("Failed to read api/reports/index.json: %s (non-fatal)", exc)
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "ERROR_READ_INDEX")
-        return 0
+        return 2
 
     all_entries: List[dict] = index_data.get("reports", [])
     if not all_entries:
         log.info("Index has no entries -- nothing to verify")
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "OK_EMPTY_INDEX")
-        return 0
+        return 2
 
     log.info("Index entries: %d total", len(all_entries))
 
@@ -326,7 +327,9 @@ def main() -> int:
         if lk and lk not in entry_key_map:
             entry_key_map[lk] = entry
 
-    all_keys_to_check = list(entry_key_map.keys())
+    # Required feed URLs are independently authoritative inputs to the
+    # customer delivery gate: verify them even if catalogs are inconsistent.
+    all_keys_to_check = sorted(set(entry_key_map) | current_run_keys)
     log.info("Dispatching %d parallel R2 head-object checks (workers=%d)...",
              len(all_keys_to_check), MAX_WORKERS)
 
@@ -383,6 +386,15 @@ def main() -> int:
                   len(current_missing))
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS",
                           f"HARD_FAIL_all_{len(current_missing)}_current_run_reports_missing")
+        return 1
+
+    # P0 release safety: do not remove live customer catalog entries in an
+    # integrity gate. Any confirmed missing report requires an operator-led
+    # reconciliation with backup and remote read-back. This stage performs
+    # read-only HEAD verification; it never mutates/publishes catalog files.
+    if missing_keys:
+        log.error("BLOCKED: %d confirmed missing R2 report(s); catalogs preserved", len(missing_keys))
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", f"BLOCKED_MISSING_REPORTS_{len(missing_keys)}")
         return 1
 
     # --- Purge stale entries from index ---
