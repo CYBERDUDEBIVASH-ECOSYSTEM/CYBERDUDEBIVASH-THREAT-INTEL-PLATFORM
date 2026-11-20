@@ -305,6 +305,30 @@ def main() -> int:
         return 2
     latest_reports_raw = latest_data["reports"]
 
+    # Every customer-facing catalog entry must map to a report object.
+    # Local mapping checks are cheap and avoid an unnecessary paid R2 HEAD.
+    indexed_keys: Set[str] = set()
+    for entry in all_entries:
+        raw = entry.get("path") or entry.get("url")
+        key = _path_to_r2_key(raw) if isinstance(raw, str) else None
+        if not key:
+            log.error("Index contains a report with no valid R2 object mapping")
+            _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_INDEX_REPORT_URL")
+            return 2
+        indexed_keys.add(key)
+    for entry in latest_reports_raw:
+        raw = entry.get("path") or entry.get("url")
+        key = _path_to_r2_key(raw) if isinstance(raw, str) else None
+        if not key:
+            log.error("Latest catalog contains invalid R2 report mapping")
+            _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_LATEST_REPORT_URL")
+            return 2
+    feed_only = current_run_keys - indexed_keys
+    if feed_only:
+        log.error("Index is missing %d report(s) referenced by canonical feed; catalogs unchanged", len(feed_only))
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_FEED_INDEX_PARITY")
+        return 2
+
     # --- Select entries to check (most recent MAX_CHECK + all current-run) ---
     entries_to_check = all_entries[:MAX_CHECK]
     skipped = len(all_entries) - len(entries_to_check)
