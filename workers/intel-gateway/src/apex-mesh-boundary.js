@@ -275,6 +275,7 @@ function admissionMatches(payload, expected) {
     && payload.version === MESH_VERSION
     && payload.state === 'admitted'
     && typeof payload.execution_id === 'string'
+    && ID.test(payload.execution_id)
     && payload.tenant_id === expected.tenant_id
     && payload.mission_id === expected.mission_id
     && payload.correlation_id === expected.correlation_id
@@ -282,13 +283,17 @@ function admissionMatches(payload, expected) {
   );
 }
 
-function completionMatches(payload, session) {
+function completionMatches(payload, session, expectedOutcome) {
   return Boolean(
     payload
     && payload.version === MESH_VERSION
     && payload.mission_id === session.missionId
     && payload.execution_id === session.executionId
-    && typeof payload.state === 'string'
+    // The private Mesh must acknowledge the same operation outcome that the
+    // gateway actually recorded. A rejected/unknown completion is NOT
+    // evidence that a customer response has been certified.
+    && (expectedOutcome === 'succeeded' || expectedOutcome === 'failed')
+    && payload.state === expectedOutcome
   );
 }
 
@@ -350,7 +355,7 @@ export async function completeApexMeshBoundary(session, response, env) {
       output_sha256: await sha256Bytes(bytes),
     };
     const { response: meshResponse, payload } = await meshFetch(env, '/v1/mesh/complete', completion, session.tenantId);
-    if (!meshResponse.ok || !completionMatches(payload, session)) return fail(503, 'agent_mesh_unavailable');
+    if (!meshResponse.ok || !completionMatches(payload, session, completion.outcome)) return fail(503, 'agent_mesh_unavailable');
 
     const headers = new Headers(response.headers);
     headers.set('X-CDB-Mesh-Certified', 'true');
