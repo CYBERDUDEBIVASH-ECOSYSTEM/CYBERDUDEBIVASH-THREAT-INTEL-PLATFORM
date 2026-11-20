@@ -21,8 +21,17 @@ const Toast = (() => {
     const colors = { success: '#00e676', error: '#ff1744', info: '#00e5ff', warning: '#ff9800' };
     const t = document.createElement('div');
     t.className = 'toast';
-    t.style.borderColor = colors[type];
-    t.innerHTML = `<span style="color:${colors[type]};font-weight:700">${icons[type] || '◈'}</span><span>${msg}</span>`;
+    const kind = Object.prototype.hasOwnProperty.call(colors, type) ? type : 'info';
+    t.style.borderColor = colors[kind];
+    const icon = document.createElement('span');
+    icon.style.color = colors[kind];
+    icon.style.fontWeight = '700';
+    icon.textContent = icons[kind];
+    const message = document.createElement('span');
+    // API error messages and provider names are untrusted text, never HTML.
+    message.textContent = String(msg ?? '');
+    t.appendChild(icon);
+    t.appendChild(message);
     container.appendChild(t);
     setTimeout(() => {
       t.style.animation = 'slide-in .3s ease reverse forwards';
@@ -117,7 +126,8 @@ async function handleSubscribe(btn) {
     }
   } catch (e) {
     Toast.error('Network error — please try again.');
-    ErrorBanner.show('Network error — could not reach payment server. Try again or use the <a href="https://tools.cyberdudebivash.com/" style="color:var(--cyan)" target="_blank">Gumroad store</a>.');
+    ErrorBanner.show('Network error — could not reach payment server. Try again or use the Gumroad store.', 6000,
+      { href: 'https://tools.cyberdudebivash.com/', label: 'Gumroad store' });
   }
   btn.disabled = false;
   btn.innerHTML = orig;
@@ -253,9 +263,33 @@ const ErrorBanner = (() => {
     document.body.appendChild(_banner);
     return _banner;
   }
-  function show(msg, autohide = 6000) {
+  function show(msg, autohide = 6000, link = null) {
     const b = _getOrCreate();
-    b.innerHTML = `<span style="color:#ff1744;font-weight:700">⚠</span> ${msg} <button onclick="ErrorBanner.hide()" style="margin-left:12px;background:none;border:none;color:rgba(232,240,254,.4);cursor:pointer;font-size:1.1rem;padding:0 4px">✕</button>`;
+    // Never interpolate error text into markup. An optional support link is
+    // constructed from a single approved destination, not untrusted HTML.
+    const icon = document.createElement('span');
+    icon.style.color = '#ff1744';
+    icon.style.fontWeight = '700';
+    icon.textContent = '⚠';
+    const message = document.createElement('span');
+    message.textContent = String(msg ?? '');
+    b.replaceChildren(icon, message);
+    if (link && link.href === 'https://tools.cyberdudebivash.com/') {
+      const anchor = document.createElement('a');
+      anchor.href = link.href;
+      anchor.textContent = String(link.label || 'Gumroad store');
+      anchor.style.color = 'var(--cyan)';
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      b.appendChild(anchor);
+    }
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '✕';
+    close.setAttribute('aria-label', 'Dismiss error banner');
+    close.style.cssText = 'margin-left:12px;background:none;border:none;color:rgba(232,240,254,.4);cursor:pointer;font-size:1.1rem;padding:0 4px';
+    close.addEventListener('click', hide);
+    b.appendChild(close);
     b.style.display = 'flex';
     if (autohide > 0) setTimeout(() => hide(), autohide);
   }
