@@ -682,6 +682,14 @@ def clear_report_urls(html_ids: set[str], pdf_ids: set[str]) -> list[Path]:
                     if item.get(field):
                         item[field] = ""
                         touched += 1
+                # An authenticated successful R2 HTML retirement must also
+                # revoke any "ok/enriched/valid" report certification. Leaving
+                # validation_status="ok" with report_url="" breaks V10 and
+                # falsely signals a deliverable customer report. Do not alter
+                # TLP quarantine or independently validated source fields.
+                if item.get("validation_status") in ("ok", "enriched", "valid"):
+                    item["validation_status"] = "report_retired"
+                    touched += 1
             if item_id in pdf_ids:
                 if item.get("pdf_url"):
                     item["pdf_url"] = ""
