@@ -18,6 +18,13 @@ test('Retiring unverified profiles does not break approved first-party profiles'
   for (const name of PUBLIC_IDENTITIES) {
     const source = readFileSync(resolve(ROOT, name), 'utf8');
     assert.match(source, /https:\/\/www\.linkedin\.com\/company\/cyberdudebivash\//, name);
-    assert.match(source, /https:\/\/www\.instagram\.com\/cyberdudebivash_official\//, name);
+  }
+});
+// Owner directive 2026-11-20 (researcher findings #7-#13): the Instagram, X/Twitter, Tumblr and GitHub-profile
+// links were also retired from these public identity sources; LinkedIn is the one remaining approved profile here.
+test('Public first-party identity sources no longer publish the Instagram, X/Twitter, Tumblr or GitHub-profile links', () => {
+  for (const name of PUBLIC_IDENTITIES) {
+    const source = readFileSync(resolve(ROOT, name), 'utf8');
+    assert.doesNotMatch(source, /https?:\/\/(?:(?:www|mobile)\.)?(?:instagram\.com|tumblr\.com|(?:x|twitter)\.com\/(?:CDBSENTINELAPEX|cyberbivash|cyberdudebivash|Iambivash007)|github\.com\/cyberdudebivash\/?(?=["'\s)<,#?]|$))/i, name);
   }
 });

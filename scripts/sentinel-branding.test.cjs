@@ -181,8 +181,8 @@ test('governed public identity sources do not publish retired X or Tumblr identi
   const llms = fs.readFileSync(path.join(root, 'llms.txt'), 'utf8');
   const layout = fs.readFileSync(path.join(root, 'platform/frontend/src/app/layout.tsx'), 'utf8');
   for (const source of [llms, layout]) {
-    assert.ok(!/x\.com\/(?:CDBSENTINELAPEX|cyberbivash|Iambivash007)|twitter\.com\/(?:CDBSENTINELAPEX|cyberbivash|Iambivash007)|tumblr\.com/i.test(source));
+    // Owner directive 2026-11-20: no first-party link to X/Twitter, Tumblr, Instagram, Facebook, ORCID or the GitHub profile.
+    assert.ok(!/x\.com\/(?:CDBSENTINELAPEX|cyberbivash|Iambivash007)|twitter\.com\/(?:CDBSENTINELAPEX|cyberbivash|Iambivash007)|tumblr\.com|instagram\.com\/|facebook\.com\/|orcid\.org|github\.com\/cyberdudebivash\/?(?=["'\s)<,]|$)/i.test(source));
   }
   assert.ok(llms.includes('https://www.linkedin.com/company/cyberdudebivash/'));
-  assert.ok(llms.includes('https://www.instagram.com/cyberdudebivash_official/'));
 });
