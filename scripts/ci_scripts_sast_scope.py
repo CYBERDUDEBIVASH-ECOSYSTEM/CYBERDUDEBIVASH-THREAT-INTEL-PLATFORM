@@ -132,8 +132,8 @@ def scan(root: Path, destination: Path) -> int:
          "--json", "--output", str(semgrep_file), *targets],
         cwd=root, capture_output=True, text=True,
     )
-    if status.returncode != 0 or not semgrep_file.is_file():
-        raise RuntimeError("SCRIPT_SAST_SEMGREP_FAILED_OR_FOUND_ISSUES")
+    if not semgrep_file.is_file():
+        raise RuntimeError("SCRIPT_SAST_SEMGREP_REPORT_MISSING")
     semgrep_findings = json.loads(semgrep_file.read_text(encoding="utf-8")).get("results")
     if not isinstance(semgrep_findings, list):
         raise ValueError("SCRIPT_SAST_SEMGREP_RESULT_INVALID")
@@ -150,6 +150,10 @@ def scan(root: Path, destination: Path) -> int:
                           "rule": str(finding.get("check_id", "UNKNOWN"))[:100],
                           "file": path,
                           "line": (finding.get("start") or {}).get("line")}, sort_keys=True), flush=True)
+    # --error makes Semgrep exit nonzero on findings. Parse its report first
+    # for bounded diagnostics, but do not treat scanner failure as clean.
+    if status.returncode != 0:
+        raise RuntimeError("SCRIPT_SAST_SEMGREP_FAILED_OR_FOUND_ISSUES")
     if findings:
         raise RuntimeError("SCRIPT_SAST_BANDIT_HIGH_FINDINGS")
     if semgrep_findings:
