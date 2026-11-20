@@ -119,8 +119,8 @@ def scan(root: Path, destination: Path) -> int:
             line = "UNKNOWN"
         print(json.dumps({"scanner": "bandit", "rule": rule,
                           "file": file, "line": line}, sort_keys=True), flush=True)
-    if findings:
-        raise RuntimeError("SCRIPT_SAST_BANDIT_HIGH_FINDINGS")
+    # Do not abort before Semgrep: preserve both scanner results for triage.
+    # The final gate still fails closed on any Bandit finding.
 
     # Semgrep 1.x ERROR-only rules; scanning each exact target is bounded
     # by GitHub job timeout and the analyzer's own per-rule 45-second cap.
@@ -150,6 +150,8 @@ def scan(root: Path, destination: Path) -> int:
                           "rule": str(finding.get("check_id", "UNKNOWN"))[:100],
                           "file": path,
                           "line": (finding.get("start") or {}).get("line")}, sort_keys=True), flush=True)
+    if findings:
+        raise RuntimeError("SCRIPT_SAST_BANDIT_HIGH_FINDINGS")
     if semgrep_findings:
         raise RuntimeError("SCRIPT_SAST_SEMGREP_FINDINGS")
     print("SCRIPT_SAST_PASS: validated both scanner reports and scanned all selected Python paths")
