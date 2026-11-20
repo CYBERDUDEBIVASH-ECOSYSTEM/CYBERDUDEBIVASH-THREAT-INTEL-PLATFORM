@@ -19,8 +19,8 @@ ENVIRONMENT (consumed):
   CF_ACCOUNT_ID            -- Cloudflare account ID
   CF_R2_REPORTS_KEY_ID     -- Dedicated R2 token for sentinel-apex-reports bucket
   CF_R2_REPORTS_SECRET_KEY -- Dedicated R2 secret for sentinel-apex-reports bucket
-  AWS_ACCESS_KEY_ID        -- Job-level R2 key (sentinel-apex-data re-upload)
-  AWS_SECRET_ACCESS_KEY    -- Job-level R2 secret (sentinel-apex-data re-upload)
+  AWS_ACCESS_KEY_ID        -- Optional fallback credentials for report HEAD
+  AWS_SECRET_ACCESS_KEY    -- Optional fallback secret for report HEAD
 
 (c) 2026 CyberDudeBivash Pvt. Ltd. All Rights Reserved. CONFIDENTIAL.
 """
@@ -229,13 +229,13 @@ def main() -> int:
     cf_account, reports_key, reports_sec, data_key, data_sec = _get_credentials()
 
     if not cf_account:
-        log.warning("CF_ACCOUNT_ID not set -- skipping R2 integrity check (non-fatal)")
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "SKIP_NO_ACCOUNT_ID")
+        log.error("R2 integrity BLOCKED: CF_ACCOUNT_ID not configured")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_NO_ACCOUNT_ID")
         return 2
 
     if not reports_key or not reports_sec:
-        log.warning("No R2 credentials available -- skipping integrity check (non-fatal)")
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "SKIP_NO_CREDENTIALS")
+        log.error("R2 integrity BLOCKED: dedicated or fallback report credentials not configured")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_NO_CREDENTIALS")
         return 2
 
     endpoint = f"https://{cf_account}.r2.cloudflarestorage.com"
@@ -244,14 +244,14 @@ def main() -> int:
 
     # --- Load index ---
     if not INDEX_PATH.exists():
-        log.warning("api/reports/index.json not found -- skipping (non-fatal)")
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "SKIP_NO_INDEX")
+        log.error("R2 integrity BLOCKED: required api/reports/index.json absent")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_NO_INDEX")
         return 2
 
     try:
         index_data = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
     except Exception as exc:
-        log.error("Failed to read api/reports/index.json: %s (non-fatal)", exc)
+        log.error("R2 integrity BLOCKED: cannot read api/reports/index.json (%s)", type(exc).__name__)
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "ERROR_READ_INDEX")
         return 2
 
@@ -263,8 +263,8 @@ def main() -> int:
         return 2
     all_entries: List[dict] = index_data["reports"]
     if not all_entries:
-        log.info("Index has no entries -- nothing to verify")
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "OK_EMPTY_INDEX")
+        log.error("R2 integrity BLOCKED: index contains no reports")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_EMPTY_INDEX")
         return 2
 
     log.info("Index entries: %d total", len(all_entries))
@@ -301,14 +301,9 @@ def main() -> int:
         current_run_keys.add(key)
     log.info("Current-run report URLs: %d", len(current_run_keys))
 
-    # --- Load latest.json up front (needed both to build the check set below
-    #     and to purge it later) so its own entries -- which are not
-    #     guaranteed to be a strict subset of index.json's checked window --
-    #     are actually verified, not just carried along for the ride. v1.1
-    #     FIX: previously latest.json's entries were never added to the
-    #     checked key set at all, so a staleness unique to latest.json
-    #     (e.g. after independent drift between the two files) could never
-    #     be detected or purged by this gate.
+    # --- Load latest.json for independent checked-window verification.
+    #     Its entries may differ from the index's bounded recent window;
+    #     they must be checked rather than silently bypassed.
     if not LATEST_PATH.exists():
         log.error("Required latest catalog missing")
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_MISSING_LATEST")
