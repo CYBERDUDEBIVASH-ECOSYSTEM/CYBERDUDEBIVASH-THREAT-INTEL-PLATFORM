@@ -100,5 +100,65 @@ class TestPublicationBoundaries(unittest.TestCase):
                 p.stop()
 
 
+    def test_retirement_manifest_failure_restores_retry_state_and_sets_blocker(self):
+        state = {"schema_version": "1.0", "items": {
+            "intel--fixture": {"html_key": "reports/2026/11/fixture.html",
+                               "canonical_ts": "2026-11-15T00:00:00Z"}
+        }}
+        deletes = [{"id": "intel--fixture", "kind": "html",
+                    "bucket": pub.BUCKET_REPORTS, "key": "reports/2026/11/fixture.html"}]
+        with patch.object(pub, "s3_delete", return_value=True) as delete, \
+             patch.object(pub, "clear_report_urls", return_value=[Path("/tmp/unwritable.json")]):
+            result = pub.execute_plan([], deletes, state, "https://example.invalid",
+                                      deadline_monotonic=time.monotonic() + 120)
+        self.assertEqual(result, (0, 1), "preserve two-value interface for existing callers")
+        delete.assert_called_once()
+        self.assertEqual(state["items"]["intel--fixture"]["html_key"],
+                         "reports/2026/11/fixture.html")
+        self.assertIs(state["_p0_manifest_reconciliation_failed"], True)
+
+    def test_reconciliation_failure_forces_blocked_after_state_checkpoint(self):
+        plan = pub.R2OperationPlan(label="fixture", bucket=pub.BUCKET_REPORTS)
+        state = {"schema_version": "1.0", "items": {"intel--fixture": {
+            "html_key": "reports/x.html", "canonical_ts": "2026-11-15T00:00:00Z"
+        }}}
+        budget = SimpleNamespace(max_report_deletes_per_run=500)
+        deletes = [{"id": "intel--fixture", "kind": "html", "bucket": pub.BUCKET_REPORTS,
+                    "key": "reports/x.html"}]
+        def attempted_publish(*args, **kwargs):
+            state["_p0_manifest_reconciliation_failed"] = True
+            return 0, 1
+        patches = [
+            patch.object(pub, "report_publishing_enabled", return_value=True),
+            patch.object(pub, "_load_json", return_value=[]),
+            patch.object(pub, "_get_items", return_value=[]),
+            patch.object(pub, "load_publish_state", return_value=state),
+            patch.object(pub, "apply_tlp_gate", return_value=([], [])),
+            patch.object(pub, "write_tlp_quarantine_report"),
+            patch.object(pub, "build_publish_candidates", return_value=[]),
+            patch.object(pub.R2Budgets, "from_env", return_value=budget),
+            patch.object(pub, "build_plan", return_value=(plan, [], deletes)),
+            patch.object(pub, "enforce_budget"),
+            patch.object(pub, "get_credentials", return_value=("account", "", "")),
+            patch.object(pub, "install_awscli"),
+            patch.object(pub, "execute_plan", side_effect=attempted_publish),
+            patch.object(pub, "save_publish_state"),
+            patch.object(pub, "emit_summary"),
+            patch.object(sys, "argv", ["r2_report_publisher.py"]),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            self.assertEqual(pub.main(), 1, "manifest reconciliation failure must block publication")
+            pub.save_publish_state.assert_called_once_with(state)
+            self.assertNotIn("_p0_manifest_reconciliation_failed", state)
+            self.assertEqual(pub.emit_summary.call_args.kwargs["status"], "BLOCKED")
+            self.assertEqual(pub.emit_summary.call_args.kwargs["extra"]["reason"],
+                             "retirement_manifest_reconciliation_failed")
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+
 if __name__ == "__main__":
     unittest.main()
