@@ -144,6 +144,13 @@ jobs:
         run: python3 scripts/generate_platform_evidence.py --check
       - name: "Regression test suite"
         run: python3 scripts/regression_tests.py
+      - name: "P0 Security Remediation Regression Tests (fail closed)"
+        run: |
+          python3 -m pip install --quiet "pytest==8.3.5"
+          python3 -m pytest -q \\
+            tests/test_p0_r19_origin_redirect.py \\
+            tests/test_p0_scripts_sast_dual_evidence.py \\
+            tests/test_p0_rate_cert_diagnostics.py
 
   # ---------------------------------------------------------------------
   # Phase 4 (partial) / 9 / 10-15: controlled authenticated acceptance
