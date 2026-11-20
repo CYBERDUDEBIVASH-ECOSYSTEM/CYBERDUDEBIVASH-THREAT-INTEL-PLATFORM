@@ -17,12 +17,9 @@ inconsistent report registry: live production was observed serving
 index.json with total_reports=329 and latest.json with total_reports=0 from
 what should have been the same authoritative source.
 
-This file also covers two related bugs found in scripts/r2_reports_integrity.py
-(STAGE 3.5.1, which purges index/latest entries whose HTML is confirmed
-missing from R2): total_reports was left stale after a purge (drifting from
-the true count), and latest.json was only ever checked when index.json's own
-purge_count was nonzero -- so a staleness unique to latest.json could survive
-indefinitely.
+This file also verifies that scripts/r2_reports_integrity.py preserves
+customer catalogs on any proven R2 object loss, including latest-only drift.
+Automatic purging was retired as an unsafe response to delivery uncertainty.
 """
 import json
 import os
@@ -75,103 +72,51 @@ class TestGenerateDashboardFeedsDoesNotWriteReportRegistry:
         assert not (tmp_path / "api" / "v1" / "intel" / "apex.json").exists()
 
 
-class TestR2ReportsIntegrityPurgeConsistency:
-    """scripts/r2_reports_integrity.py must keep total_reports consistent
-    after a purge, and must check/purge latest.json regardless of whether
-    index.json itself had anything to purge."""
+class TestR2ReportsIntegrityPreservesCatalogs:
+    """P0: missing R2 objects block delivery without altering registry bytes.
 
-    def _common_env(self, monkeypatch):
+    Historical F-02 coverage previously asserted destructive index/latest
+    purges. The verified safety contract is now fail-closed preservation.
+    The registry's sole authorized writer remains build_reports_index.py.
+    """
+
+    def _setup(self, tmp_path, monkeypatch, index, latest, missing_id):
         monkeypatch.setenv("CF_ACCOUNT_ID", "test-account")
         monkeypatch.setenv("CF_R2_REPORTS_KEY_ID", "test-key")
         monkeypatch.setenv("CF_R2_REPORTS_SECRET_KEY", "test-secret")
         monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
         monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
-        monkeypatch.setattr(integrity, "_s3_cp", lambda *a, **k: True)
-
-    def _patch_paths(self, tmp_path, monkeypatch):
         monkeypatch.setattr(integrity, "INDEX_PATH", tmp_path / "api" / "reports" / "index.json")
         monkeypatch.setattr(integrity, "LATEST_PATH", tmp_path / "api" / "reports" / "latest.json")
         monkeypatch.setattr(integrity, "FEED_PATH", tmp_path / "api" / "feed.json")
-
-    def test_total_reports_decrements_by_purged_count(self, tmp_path, monkeypatch):
-        self._patch_paths(tmp_path, monkeypatch)
-        self._common_env(monkeypatch)
-
-        _write_json(integrity.INDEX_PATH, {
-            "schema_version": "1.0", "total_reports": 3, "reports_listed": 3,
-            "reports": [
-                {"id": "intel--a", "path": "/reports/2026/08/intel--a.html"},
-                {"id": "intel--b", "path": "/reports/2026/08/intel--b.html"},
-                {"id": "intel--c", "path": "/reports/2026/08/intel--c.html"},
-            ],
-        })
-        _write_json(integrity.LATEST_PATH, {
-            "schema_version": "1.0", "total_reports": 3, "reports_listed": 2,
-            "reports": [
-                {"id": "intel--a", "path": "/reports/2026/08/intel--a.html"},
-                {"id": "intel--b", "path": "/reports/2026/08/intel--b.html"},
-            ],
-        })
+        _write_json(integrity.INDEX_PATH, index)
+        _write_json(integrity.LATEST_PATH, latest)
         _write_json(integrity.FEED_PATH, [])
+        before = (integrity.INDEX_PATH.read_bytes(), integrity.LATEST_PATH.read_bytes())
+        monkeypatch.setattr(integrity, "_r2_object_exists",
+                            lambda key, *a, **k: missing_id not in key)
+        def forbid_upload(*args, **kwargs):
+            raise AssertionError("Integrity verification must never write to R2")
+        monkeypatch.setattr(integrity, "_s3_cp", forbid_upload)
+        return before
 
-        # intel--b is missing from R2 (e.g. its upload silently failed).
-        monkeypatch.setattr(
-            integrity, "_r2_object_exists",
-            lambda key, *a, **k: "intel--b" not in key,
-        )
+    def test_missing_index_entry_blocks_without_purging_or_count_drift(self, tmp_path, monkeypatch):
+        rows = [{"id": f"intel--{key}", "path": f"/reports/2026/08/intel--{key}.html"}
+                for key in ("a", "b", "c")]
+        index = {"total_reports": 3, "reports_listed": 3, "reports": rows}
+        latest = {"total_reports": 3, "reports_listed": 2, "reports": rows[:2]}
+        before = self._setup(tmp_path, monkeypatch, index, latest, "intel--b")
+        assert integrity.main() == 1
+        assert (integrity.INDEX_PATH.read_bytes(), integrity.LATEST_PATH.read_bytes()) == before
+        assert json.loads(integrity.INDEX_PATH.read_text())["total_reports"] == 3
+        assert json.loads(integrity.LATEST_PATH.read_text())["reports_listed"] == 2
 
-        rc = integrity.main()
-        assert rc == 0
-
-        new_index = json.loads(integrity.INDEX_PATH.read_text())
-        assert new_index["reports_listed"] == 2
-        assert new_index["total_reports"] == 2, (
-            "total_reports must be reduced by the purged count, not left stale (F-02 fix)"
-        )
-        assert {r["id"] for r in new_index["reports"]} == {"intel--a", "intel--c"}
-
-        new_latest = json.loads(integrity.LATEST_PATH.read_text())
-        assert new_latest["reports_listed"] == 1
-        assert new_latest["total_reports"] == 2, (
-            "latest.json's total_reports must also be reduced by its own purged count"
-        )
-        assert {r["id"] for r in new_latest["reports"]} == {"intel--a"}
-
-    def test_latest_purged_even_when_index_has_zero_purges(self, tmp_path, monkeypatch):
-        """The exact bug this guards against: index.json has nothing to purge
-        (all its entries verified present), but latest.json has independently
-        drifted and lists an entry that is not even present in index.json's
-        own list. Before the fix, latest.json's own entries were never added
-        to the checked key set, and the purge block was gated on index.json's
-        purge_count -- so this stale entry would survive forever."""
-        self._patch_paths(tmp_path, monkeypatch)
-        self._common_env(monkeypatch)
-
-        _write_json(integrity.INDEX_PATH, {
-            "schema_version": "1.0", "total_reports": 1, "reports_listed": 1,
-            "reports": [{"id": "intel--a", "path": "/reports/2026/08/intel--a.html"}],
-        })
-        _write_json(integrity.LATEST_PATH, {
-            "schema_version": "1.0", "total_reports": 1, "reports_listed": 1,
-            "reports": [{"id": "intel--z", "path": "/reports/2026/08/intel--z.html"}],
-        })
-        _write_json(integrity.FEED_PATH, [])
-
-        # Only intel--z is missing from R2; intel--a is fine.
-        monkeypatch.setattr(
-            integrity, "_r2_object_exists",
-            lambda key, *a, **k: "intel--z" not in key,
-        )
-
-        rc = integrity.main()
-        assert rc == 0
-
-        new_index = json.loads(integrity.INDEX_PATH.read_text())
-        assert new_index["reports_listed"] == 1  # unchanged -- intel--a is present
-
-        new_latest = json.loads(integrity.LATEST_PATH.read_text())
-        assert new_latest["reports_listed"] == 0, (
-            "intel--z must be purged from latest.json even though index.json "
-            "had zero purges of its own (F-02 decoupling fix)"
-        )
-        assert new_latest["total_reports"] == 0
+    def test_latest_only_missing_entry_blocks_without_erasing_catalog(self, tmp_path, monkeypatch):
+        index = {"total_reports": 1, "reports_listed": 1,
+                 "reports": [{"id": "intel--a", "path": "/reports/2026/08/intel--a.html"}]}
+        latest = {"total_reports": 1, "reports_listed": 1,
+                  "reports": [{"id": "intel--z", "path": "/reports/2026/08/intel--z.html"}]}
+        before = self._setup(tmp_path, monkeypatch, index, latest, "intel--z")
+        assert integrity.main() == 1
+        assert (integrity.INDEX_PATH.read_bytes(), integrity.LATEST_PATH.read_bytes()) == before
+        assert json.loads(integrity.LATEST_PATH.read_text())["reports_listed"] == 1
