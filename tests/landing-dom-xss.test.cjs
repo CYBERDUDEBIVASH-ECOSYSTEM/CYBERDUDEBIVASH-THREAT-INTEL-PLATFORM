@@ -34,9 +34,10 @@ function bootstrap() {
   };
   const window = {};
   const source = fs.readFileSync(path.join(__dirname, '..', 'landing', 'script.js'), 'utf8');
-  vm.runInNewContext(source, { document, window, setTimeout() {}, console }, {
-    filename: 'landing/script.js', timeout: 3000,
-  });
+  vm.runInNewContext(source + '\nwindow.__testSafeCheckoutUrl = safeCheckoutUrl;',
+    { document, window, setTimeout() {}, console, URL }, {
+      filename: 'landing/script.js', timeout: 3000,
+    });
   return { window, body, ids };
 }
 
@@ -88,4 +89,31 @@ test('error banner rejects an unapproved outbound support link', () => {
   });
   const banner = ids.get('error-banner');
   assert.equal(banner.children.filter(c => c.tagName === 'A').length, 0);
+});
+
+test('legacy checkout accepts only approved HTTPS payment destinations', () => {
+  const { window } = bootstrap();
+  const verify = window.__testSafeCheckoutUrl;
+  for (const approved of [
+    'https://checkout.razorpay.com/pay/checkout123',
+    'https://checkout.stripe.com/c/pay/checkout123',
+    'https://gumroad.com/l/official-product',
+    'https://tools.cyberdudebivash.com/',
+  ]) {
+    assert.equal(verify(approved), approved);
+  }
+  for (const unsafe of [
+    'javascript:alert(1)',
+    'data:text/html,<img src=x onerror=alert(1)>',
+    'http://checkout.stripe.com/pay',
+    'https://checkout.stripe.com.evil.example/pay',
+    'https://user:pass@checkout.razorpay.com/pay',
+    'https://attacker.example/pay',
+    '//checkout.stripe.com/pay',
+    'https://checkout.stripe.com:444/pay',
+    '/relative-checkout',
+    '',
+  ]) {
+    assert.equal(verify(unsafe), null, unsafe);
+  }
 });
