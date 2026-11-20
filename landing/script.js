@@ -87,6 +87,22 @@ function initReveal() {
   els.forEach(el => { el.style.opacity = '0'; io.observe(el); });
 }
 
+/* ── Payment-redirect trust boundary ────────────────────────────────── */
+function safeCheckoutUrl(raw) {
+  // Legacy subscribe integration remains intentionally fail-closed. Never
+  // send a customer to a provider URL whose destination is not verified.
+  if (typeof raw !== 'string' || raw.length > 2048) return null;
+  let target;
+  try { target = new URL(raw); } catch { return null; }
+  if (target.protocol !== 'https:' || target.username || target.password || target.port) return null;
+  const allowed = new Set([
+    'checkout.razorpay.com', 'checkout.stripe.com',
+    'gumroad.com', 'www.gumroad.com',
+    'tools.cyberdudebivash.com',
+  ]);
+  return allowed.has(target.hostname) ? target.href : null;
+}
+
 /* ── Subscribe Button Handler ──────────────────────────────────────────── */
 /* DEPRECATED: no [data-subscribe] element remains in index.html — the pricing
    CTAs now link directly to /upgrade.html (see APEX.subscribe in api.js for
@@ -114,8 +130,13 @@ async function handleSubscribe(btn) {
   try {
     const { ok, data, error } = await APEX.subscribe(plan, provider, name, email);
     if (ok && data.checkout_url) {
-      Toast.success(`Redirecting to ${data.provider || provider} checkout...`);
-      setTimeout(() => { window.location.href = data.checkout_url; }, 800);
+      const checkout = safeCheckoutUrl(data.checkout_url);
+      if (!checkout) {
+        Toast.error('Secure checkout destination could not be verified. Use the official upgrade page.');
+      } else {
+        Toast.success(`Redirecting to ${data.provider || provider} checkout...`);
+        setTimeout(() => { window.location.href = checkout; }, 800);
+      }
     } else if (ok && data.status === 'ok' && data.tier === 'free') {
       Toast.success('Free tier active — no payment needed!');
       btn.innerHTML = '✓ Free Plan Active';
@@ -126,7 +147,7 @@ async function handleSubscribe(btn) {
     }
   } catch (e) {
     Toast.error('Network error — please try again.');
-    ErrorBanner.show('Network error — could not reach payment server. Try again or use the Gumroad store.', 6000,
+    ErrorBanner.show('Network error — could not reach payment server. Try again or use the official store:', 6000,
       { href: 'https://tools.cyberdudebivash.com/', label: 'Gumroad store' });
   }
   btn.disabled = false;
