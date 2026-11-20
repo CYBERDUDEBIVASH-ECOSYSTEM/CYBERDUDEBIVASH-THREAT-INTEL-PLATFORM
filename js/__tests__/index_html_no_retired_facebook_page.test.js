@@ -34,12 +34,35 @@ test("no root HTML entry point links to or embeds the retired Facebook Page", ()
   }
 });
 
-test("the footer social strip keeps its other first-party identities", () => {
+test("the footer social strip no longer links to any retired profile and keeps its other identities", () => {
   const html = readFileSync(path.join(ROOT, "index.html"), "utf8");
   const strip = html.match(/<div class="social-strip">([\s\S]*?)<\/div>/);
   assert.ok(strip, "social strip must remain on the homepage");
-  assert.match(strip[1], /x\.com\/CDBSENTINELAPEX/);
-  assert.match(strip[1], /instagram\.com\/cyberdudebivash_official\//);
-  assert.match(strip[1], /github\.com\/cyberdudebivash/);
-  assert.doesNotMatch(strip[1], /facebook/i);
+  assert.match(strip[1], /bsky\.app\/profile\/cyberdudebivash\.bsky\.social/);
+  assert.match(strip[1], /mastodon\.social\/@cyberdudebivash/);
+  assert.doesNotMatch(strip[1], /facebook|instagram|x\.com|twitter\.com|github\.com|tumblr|orcid/i);
+});
+
+// Owner directive 2026-11-20 (researcher findings #7-#13): no first-party page links to, or declares in
+// structured data, the Facebook, Instagram, X/Twitter, Tumblr or ORCID profiles or the GitHub profile page.
+// X share-intent and cited-post links, and GitHub repository links, are not profile links.
+const RETIRED_PROFILE = new RegExp(
+  "https?://(?:(?:www|m|web|mobile)\\.)?(?:" +
+  "facebook\\.com|fb\\.com|fb\\.me|instagram\\.com|orcid\\.org|[a-z0-9-]*\\.?tumblr\\.com|" +
+  "(?:x|twitter)\\.com/(?:CDBSENTINELAPEX|cyberbivash|cyberdudebivash|Iambivash007)\\b|" +
+  "github\\.com/cyberdudebivash/?(?=[\"'\\s)<,#?]|$))", "i");
+
+test("no root page, landing page, API index, llms.txt or Next.js layout links to a retired social profile", () => {
+  const files = [
+    ...rootHtml,
+    "landing/index.html",
+    "api/index.html",
+    "llms.txt",
+    "platform/frontend/src/app/layout.tsx",
+  ];
+  assert.ok(rootHtml.length > 20, "root HTML inventory must be present");
+  for (const rel of files) {
+    const text = readFileSync(path.join(ROOT, rel), "utf8");
+    assert.doesNotMatch(text, RETIRED_PROFILE, `${rel} links to or declares a retired social profile`);
+  }
 });
