@@ -88,3 +88,30 @@ def test_both_clean_scanners_produce_pass():
         with mock.patch.object(sast.subprocess, "run", side_effect=fake_run):
             assert sast.scan(root, scope) == 0
         assert calls == ["bandit", "semgrep"]
+
+
+def test_semgrep_nonzero_preserves_findings_and_fails_closed(capsys):
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / "scripts").mkdir()
+        (root / "scripts" / "sample.py").write_text("pass\\n", encoding="utf-8")
+        scope = root / "scope.json"
+        scope.write_text(json.dumps({"targets": ["scripts/sample.py"]}))
+
+        def fake_run(args, **kwargs):
+            if args[0] == "bandit":
+                (root / ".scripts-sast-bandit.json").write_text(
+                    '{"results": []}', encoding="utf-8")
+                return mock.Mock(returncode=0)
+            assert args[0] == "semgrep"
+            (root / ".scripts-sast-semgrep.json").write_text(
+                json.dumps({"results": [{
+                    "path": str(root / "scripts" / "sample.py"),
+                    "check_id": "security.test", "start": {"line": 1}
+                }]}), encoding="utf-8")
+            return mock.Mock(returncode=1)
+
+        with mock.patch.object(sast.subprocess, "run", side_effect=fake_run):
+            with pytest.raises(RuntimeError, match="SCRIPT_SAST_SEMGREP_FAILED_OR_FOUND_ISSUES"):
+                sast.scan(root, scope)
+    assert "Semgrep ERROR findings: 1" in capsys.readouterr().out
