@@ -9,6 +9,10 @@ const TOKEN_SCOPE = 'mesh.invoke';
 const MAX_INPUT_BYTES = 32768;
 const MAX_OUTPUT_BYTES = 524288;
 const MAX_MESH_RESPONSE_BYTES = 65536;
+const MAX_SESSION_TOKEN_LENGTH = 8192;
+const MAX_SESSION_LIFETIME_SECONDS = 86400;
+const SESSION_CLOCK_SKEW_SECONDS = 60;
+const CUSTOMER_TOKEN_ISSUER = 'SENTINEL-APEX';
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const ROUTES = Object.freeze({
   'POST /api/intel/correlate': Object.freeze({ capability: SWARM_MESH_CAPABILITY }),
@@ -66,13 +70,17 @@ function fromBase64Url(value) {
 }
 
 async function verifyJwtHs256(token, secret) {
-  if (!secret || enc.encode(secret).byteLength < 32) return null;
+  // Canonical /auth/login and SSO sessions have a 24-hour expiry, an issuer,
+  // and no audience. Cyber Watchdog sessions carry aud=cdb-watchdog and MUST
+  // NOT authorize the general /api/intel/correlate mesh admission path.
+  if (typeof token !== 'string' || !token || token.length > MAX_SESSION_TOKEN_LENGTH
+      || typeof secret !== 'string' || enc.encode(secret).byteLength < 32) return null;
   const parts = token.split('.');
-  if (parts.length !== 3) return null;
+  if (parts.length !== 3 || parts.some(part => !part || !/^[A-Za-z0-9_-]+$/.test(part))) return null;
   try {
     const [headerPart, payloadPart, signaturePart] = parts;
     const header = JSON.parse(new TextDecoder().decode(fromBase64Url(headerPart)));
-    if (header?.alg !== 'HS256') return null;
+    if (!header || header.alg !== 'HS256' || header.typ !== 'JWT') return null;
     const key = await crypto.subtle.importKey(
       'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'],
     );
@@ -82,7 +90,13 @@ async function verifyJwtHs256(token, secret) {
     if (!valid) return null;
     const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(payloadPart)));
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
-    if (payload.exp && (!Number.isFinite(payload.exp) || payload.exp < Math.floor(Date.now() / 1000))) return null;
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.iss !== CUSTOMER_TOKEN_ISSUER || payload.aud !== undefined
+        || !Number.isSafeInteger(payload.iat)
+        || !Number.isSafeInteger(payload.exp)
+        || payload.iat > now + SESSION_CLOCK_SKEW_SECONDS
+        || payload.exp <= now || payload.exp <= payload.iat
+        || payload.exp - payload.iat > MAX_SESSION_LIFETIME_SECONDS) return null;
     return payload;
   } catch {
     return null;
@@ -128,6 +142,11 @@ async function resolveMeshPrincipal(request, env) {
     if (!payload) throw new MeshAccessError('mesh_auth_invalid', 401);
     const sub = typeof payload.sub === 'string' && payload.sub ? payload.sub : null;
     if (!sub) throw new MeshAccessError('mesh_auth_invalid', 401);
+    // Missing revocation or billing deny storage is not evidence of an active
+    // subscription. Do not reserve compute in the private Mesh on that basis.
+    if (typeof env?.SECURITY_HUB_KV?.get !== 'function' || typeof env?.API_KEYS_KV?.get !== 'function') {
+      throw new MeshAccessError('mesh_auth_service_unavailable', 503);
+    }
     try {
       const revoked = await env.SECURITY_HUB_KV?.get(`jwt_revoked:${raw.slice(-24)}`);
       if (revoked) throw new MeshAccessError('mesh_token_revoked', 401);
