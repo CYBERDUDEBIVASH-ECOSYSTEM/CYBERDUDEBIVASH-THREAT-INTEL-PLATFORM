@@ -264,6 +264,48 @@ test('completion must bind to the admitted execution', async () => {
   assert.equal((await result.json()).error, 'agent_mesh_unavailable');
 });
 
+test('an admission missing a bounded execution identifier cannot reserve a Mesh mission', async () => {
+  for (const badId of ['', 'x'.repeat(129), 'bad id', 'bad\\nidentifier']) {
+    const fixture = envFor(undefined, (kind, payload) =>
+      kind === 'admit' ? { ...payload, execution_id: badId } : payload);
+    const begin = await beginApexMeshBoundary(request('admit-bad-id'), fixture.env);
+    assert.equal(begin.blockedResponse.status, 503, JSON.stringify(badId));
+    assert.equal((await begin.blockedResponse.json()).error, 'agent_mesh_unavailable');
+    assert.equal(fixture.calls.length, 1, 'must not proceed to complete a rejected admission');
+  }
+});
+
+test('Mesh completion acknowledgment cannot contradict a successful customer outcome', async () => {
+  const fixture = envFor(undefined, (kind, payload) =>
+    kind === 'complete' ? { ...payload, state: 'rejected' } : payload);
+  const begin = await beginApexMeshBoundary(request('completion-denied'), fixture.env);
+  const original = Response.json({ status: 'ok', verdict: 'malicious' }, { status: 200 });
+  const result = await completeApexMeshBoundary(begin.session, original, fixture.env);
+  assert.equal(result.status, 503);
+  assert.equal(result.headers.get('X-CDB-Mesh-Certified'), null);
+  assert.equal((await result.json()).error, 'agent_mesh_unavailable');
+  assert.equal(fixture.calls[1].body.outcome, 'succeeded');
+});
+
+test('Mesh must certify a failed response only when its own completion agrees', async () => {
+  const mismatch = envFor(undefined, (kind, payload) =>
+    kind === 'complete' ? { ...payload, state: 'succeeded' } : payload);
+  const beginMismatch = await beginApexMeshBoundary(request('failure-mismatch'), mismatch.env);
+  const failed = Response.json({ error: 'not_authorized' }, { status: 403 });
+  const rejected = await completeApexMeshBoundary(beginMismatch.session, failed, mismatch.env);
+  assert.equal(rejected.status, 503);
+  assert.equal(rejected.headers.get('X-CDB-Mesh-Certified'), null);
+  assert.equal(mismatch.calls[1].body.outcome, 'failed');
+
+  const accepted = envFor();
+  const beginAccepted = await beginApexMeshBoundary(request('failure-matched'), accepted.env);
+  const certified = await completeApexMeshBoundary(beginAccepted.session,
+    Response.json({ error: 'not_authorized' }, { status: 403 }), accepted.env);
+  assert.equal(certified.status, 403);
+  assert.equal(certified.headers.get('X-CDB-Mesh-Certified'), 'true');
+  assert.equal(accepted.calls[1].body.outcome, 'failed');
+});
+
 test('service token identifies only sentinel-apex with mesh.invoke scope', async () => {
   const token = await __test.issueServiceToken({ APEX_MESH_SERVICE_KEY: 's'.repeat(64) }, 'sentinel-' + '1'.repeat(48), 1000);
   const [encoded] = token.split('.');
