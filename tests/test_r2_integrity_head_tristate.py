@@ -137,18 +137,15 @@ def test_partial_current_run_missing_is_blocked_without_catalog_mutation(monkeyp
     assert (index.read_bytes(), latest.read_bytes()) == before
 
 
-def test_feed_only_report_url_is_verified_and_blocks_release(monkeypatch, tmp_path):
+def test_feed_only_report_url_blocks_on_index_parity_without_remote_head(monkeypatch, tmp_path):
     index, latest = _catalogs(monkeypatch, tmp_path)
     extra = "/reports/2026/11/not-in-index.html"
     gate.FEED_PATH.write_text(json.dumps([{"report_url": extra}]))
     before = (index.read_bytes(), latest.read_bytes())
-    checked = []
-    def head(key, *args):
-        checked.append(key)
-        return not key.endswith("not-in-index.html")
-    monkeypatch.setattr(gate, "_r2_object_exists", head)
-    assert gate.main() == 1
-    assert "reports/2026/11/not-in-index.html" in checked
+    def forbidden(*args):
+        raise AssertionError("Local catalog divergence should block before paid R2 HEAD")
+    monkeypatch.setattr(gate, "_r2_object_exists", forbidden)
+    assert gate.main() == 2
     assert (index.read_bytes(), latest.read_bytes()) == before
 
 
@@ -182,5 +179,59 @@ def test_corrupt_index_fails_closed(monkeypatch, tmp_path):
     index, latest = _catalogs(monkeypatch, tmp_path)
     index.write_text("{invalid")
     before = (index.read_bytes(), latest.read_bytes())
+    assert gate.main() == 2
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_corrupt_feed_fails_without_remote_head(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    gate.FEED_PATH.write_text("{corrupted")
+    before = (index.read_bytes(), latest.read_bytes())
+    monkeypatch.setattr(gate, "_r2_object_exists", lambda *a: (_ for _ in ()).throw(AssertionError("HEAD forbidden")))
+    assert gate.main() == 2
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_missing_latest_catalog_fails_closed(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    before = index.read_bytes()
+    latest.unlink()
+    assert gate.main() == 2
+    assert index.read_bytes() == before
+
+
+def test_invalid_latest_schema_fails_closed(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    latest.write_text(json.dumps({"reports": "invalid"}))
+    before = (index.read_bytes(), latest.read_bytes())
+    assert gate.main() == 2
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_invalid_index_schema_fails_closed(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    index.write_text(json.dumps({"reports": "invalid"}))
+    before = (index.read_bytes(), latest.read_bytes())
+    assert gate.main() == 2
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_invalid_checked_index_report_path_fails_closed(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    d = json.loads(index.read_text())
+    d["reports"][0]["path"] = "/not-reports/file.html"
+    index.write_text(json.dumps(d))
+    before = (index.read_bytes(), latest.read_bytes())
+    assert gate.main() == 2
+    assert (index.read_bytes(), latest.read_bytes()) == before
+
+
+def test_head_budget_fails_before_issuing_requests(monkeypatch, tmp_path):
+    index, latest = _catalogs(monkeypatch, tmp_path)
+    before = (index.read_bytes(), latest.read_bytes())
+    monkeypatch.setattr(gate, "MAX_TOTAL_HEAD", 0)
+    def forbidden(*args):
+        raise AssertionError("No HEAD calls allowed above configured budget")
+    monkeypatch.setattr(gate, "_r2_object_exists", forbidden)
     assert gate.main() == 2
     assert (index.read_bytes(), latest.read_bytes()) == before
