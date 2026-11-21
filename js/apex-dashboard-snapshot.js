@@ -1,0 +1,360 @@
+/*
+ * CYBERDUDEBIVASH SENTINEL APEX -- customer dashboard snapshot.
+ *
+ * One state object for the homepage intelligence widgets (EICC ticker,
+ * metrics, Last Sync, feed preview). It is built from two same-origin reads:
+ *
+ *   /api/health     -- the public freshness contract (intelligence.status,
+ *                      generated_at, age_seconds). API liveness is proven
+ *                      by this response; data freshness comes from its
+ *                      intelligence block. The two are never conflated.
+ *   /api/feed.json  -- the authoritative R2 feed the counts come from.
+ *
+ * There is no raw.githubusercontent.com fallback: that mirror is frozen
+ * (see js/feed-state.js) and must never be shown as current intelligence.
+ *
+ * build() and the *View() helpers are pure and unit-tested in Node
+ * (js/__tests__/apex-dashboard-snapshot.test.js). load() de-duplicates
+ * concurrent callers so every widget hydrates from the same generation.
+ */
+(function (root) {
+  'use strict';
+
+  var CONTRACT = 'apex-dashboard-snapshot/1.0';
+  var HEALTH_URL = '/api/health';
+  var FEED_URL = '/api/feed.json';
+  var FEED_TIMEOUT_MS = 20000;   // the feed is ~0.9 MB; 10 s was too short on slow links
+  var HEALTH_TIMEOUT_MS = 8000;
+  var REUSE_MS = 60000;          // callers within a minute share one snapshot
+
+  var MESSAGES = {
+    empty: 'NO CURRENT ADVISORIES IN THE AUTHORITATIVE FEED',
+    degraded: 'INTELLIGENCE DEGRADED',
+    unavailable: 'INTELLIGENCE TEMPORARILY UNAVAILABLE',
+  };
+
+  /** HTML-escape for the few places that still build markup strings. */
+  function esc(s) {
+    if (s === null || s === undefined) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+  }
+
+  function itemsOf(data) {
+    if (Array.isArray(data)) return data;
+    if (!data || typeof data !== 'object') return [];
+    if (Array.isArray(data.items)) return data.items;
+    return [];
+  }
+
+  // Moved from index.html's eiccEngine _iocContribution() (P0 fix: an empty
+  // iocs [] is truthy, so `ioc_count||iocs` turned the sum into a string of
+  // digits). Numeric ioc_count, else iocs.length, else a numeric scalar.
+  function iocContribution(it) {
+    if (!it || typeof it !== 'object') return 0;
+    function count(value) {
+      if (typeof value !== 'number' && typeof value !== 'string') return null;
+      if (typeof value === 'string' && !value.trim()) return null;
+      var n = Number(value);
+      return Number.isSafeInteger(n) && n >= 0 ? n : null;
+    }
+    var explicit = count(it.ioc_count);
+    if (explicit !== null) return explicit;
+    // Prefer actual indicator arrays over an unmeasured placeholder array.
+    if (Array.isArray(it.iocs) && it.iocs.length) return it.iocs.length;
+    if (Array.isArray(it.indicators) && it.indicators.length) return it.indicators.length;
+    if (it.ioc_counts && typeof it.ioc_counts === 'object' && !Array.isArray(it.ioc_counts)) {
+      return Object.values(it.ioc_counts).reduce(function(total, value) {
+        var n = count(value);
+        return total + (n === null ? 0 : n);
+      }, 0);
+    }
+    var indicators = count(it.indicator_count);
+    if (indicators !== null) return indicators;
+    var scalar = count(it.iocs);
+    return scalar === null ? 0 : scalar;
+  }
+
+  function sourceLabel(value) {
+    var s = String(value || '').trim();
+    if (!s || /^(unknown|unattributed|n\/a|none|null|-)$/i.test(s)) return '';
+    if (/^https?:\/\//i.test(s) || /^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(s)) {
+      s = s.replace(/^https?:\/\/(www\.)?/i, '').split('/')[0].split('?')[0].split(':')[0].trim().toLowerCase();
+    }
+    if (!s || s.length > 48 || /[<>"'`]/.test(s)) return '';
+    return s;
+  }
+
+  function sourceHost(it) {
+    if (!it || typeof it !== 'object') return '';
+    // Public feed items name the publisher on source / source_url. Older
+    // snapshots used feed_source. Publisher geography is not actor origin.
+    return sourceLabel(it.feed_source) || sourceLabel(it.source_url) || sourceLabel(it.source);
+  }
+
+  function sev(it) {
+    return String(it.severity || it.risk_level || '').toUpperCase();
+  }
+
+  /** Mirror the Worker contract's explicit-offset ISO-8601 parsing boundary.
+   * Date.parse alone normalizes invalid dates and accepts local timestamps.
+   * The common skew ceiling remains 3 hours until the canonical Worker/Python
+   * public_freshness_contract is safely migrated and verified together.
+   */
+  function publicationTime(raw) {
+    if (typeof raw !== 'string') return NaN;
+    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|([+-])(\d{2}):(\d{2}))$/.exec(raw);
+    if (!m) return NaN;
+    var y = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+    var hour = Number(m[4]), minute = Number(m[5]), second = Number(m[6]);
+    if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return NaN;
+    if (day > new Date(Date.UTC(y, month, 0)).getUTCDate()) return NaN;
+    var milli = m[7] ? Number((m[7] + '00').slice(0, 3)) : 0;
+    var offset = 0;
+    if (m[8] !== 'Z') {
+      var oh = Number(m[10]), om = Number(m[11]);
+      if (oh > 23 || om > 59) return NaN;
+      offset = (m[9] === '-' ? -1 : 1) * (oh * 60 + om);
+    }
+    return Date.UTC(y, month - 1, day, hour, minute, second, milli) - offset * 60000;
+  }
+
+  /** Publication freshness: /api/health first, then the feed's own contract fields. */
+  function publicationFrom(health, feed) {
+    var intel = health && health.intelligence;
+    if (intel && typeof intel.status === 'string') {
+      return {
+        status: intel.status.toLowerCase(), generated_at: intel.generated_at || null,
+        max_age_seconds: typeof intel.max_age_seconds === 'number' ? intel.max_age_seconds : null,
+        authority: 'api_health',
+      };
+    }
+    if (feed && typeof feed.freshness_status === 'string') {
+      return {
+        status: feed.freshness_status.toLowerCase(), generated_at: feed.generated_at || null,
+        max_age_seconds: typeof feed.max_age_seconds === 'number' ? feed.max_age_seconds : null,
+        authority: 'feed_contract',
+      };
+    }
+    return { status: 'unknown', generated_at: null, max_age_seconds: null, authority: 'none' };
+  }
+
+  /**
+   * The gateway FAILS CLOSED with HTTP 503 and a structured body when the feed is stale
+   * (workers/intel-gateway/src/stale-feed-policy.js, and /api/health 'degraded'). That body is
+   * authoritative proof the API is reachable and says how old the intelligence is. It can never
+   * authorize live data. Only that exact contract is accepted from a non-2xx response: any other
+   * 503 (a CDN error page, an unrelated JSON) is still "no data", so a real outage stays UNAVAILABLE.
+   * (2026-11-14: discarding these bodies made a stale feed look like an unreachable API.)
+   */
+  function gatewayContract(res, kind) {
+    if (!res || res.ok || res.status !== 503 || !res.data || typeof res.data !== 'object' || Array.isArray(res.data)) return null;
+    var d = res.data;
+    if (kind === 'feed') return d.error === 'live_intelligence_unavailable' && d.live_data_available === false ? d : null;
+    return d.service === 'sentinel-apex' && d.intelligence && typeof d.intelligence === 'object' ? d : null;
+  }
+
+  /**
+   * @param {{ok:boolean,data:*}} healthRes result of GET /api/health
+   * @param {{ok:boolean,data:*}} feedRes   result of GET /api/feed.json
+   * @param {number} nowMs
+   */
+  function build(healthRes, feedRes, nowMs) {
+    var now = typeof nowMs === 'number' ? nowMs : Date.now();
+    var healthFail = gatewayContract(healthRes, 'health');
+    var feedFail = gatewayContract(feedRes, 'feed');
+    var health = healthRes && healthRes.ok ? healthRes.data : healthFail;
+    var feed = feedRes && feedRes.ok && feedRes.data && typeof feedRes.data === 'object' ? feedRes.data : feedFail;
+    var items = feed ? itemsOf(feed).filter(function (i) { return i && typeof i === 'object'; }) : [];
+
+    var pub = publicationFrom(health, feed);
+    var genMs = publicationTime(pub.generated_at);
+    pub.age_seconds = isFinite(genMs) ? Math.max(0, Math.round((now - genMs) / 1000)) : null;
+    // P0 R36: independent feed-generation corroboration. Neither a cached
+    // health 'fresh' claim nor a feed-contract label can authorize old data.
+    var feedTime = publicationTime(feed && feed.generated_at);
+    var maxAgeMs = 6 * 3600 * 1000;
+    var maxFutureSkewMs = 3 * 3600 * 1000; // canonical Worker/Python publication freshness contract
+    var feedAgeMs = now - feedTime;
+    var feedTimeValid = isFinite(feedTime) && feedAgeMs <= maxAgeMs && feedAgeMs >= -maxFutureSkewMs;
+    var healthTimeValid = isFinite(genMs) && now - genMs <= maxAgeMs && now - genMs >= -maxFutureSkewMs;
+    // The published count is part of the authoritative feed contract. A
+    // malformed or inconsistent count must never show misleading live totals.
+    var countValid = !feed || !Object.prototype.hasOwnProperty.call(feed, 'count') ||
+      (Number.isSafeInteger(feed.count) && feed.count >= 0 && feed.count === items.length);
+    pub.fresh = pub.status === 'fresh' && feedTimeValid && healthTimeValid && countValid &&
+      !(feed && typeof feed.freshness_status === 'string' && feed.freshness_status.toUpperCase() !== 'FRESH') &&
+      !healthFail && !feedFail;
+    if (!countValid) pub.reason = 'FEED_COUNT_MISMATCH';
+    // No expired intelligence may enter the ticker, metrics or preview.
+    if (!pub.fresh) items = [];
+
+    var critical = 0, high = 0, iocs = 0, riskSum = 0, riskN = 0, sources = {};
+    items.forEach(function (it) {
+      var s = sev(it);
+      if (s === 'CRITICAL') critical++;
+      if (s === 'HIGH') high++;
+      iocs += iocContribution(it);
+      // Strict decimal semantics shared with the Worker metric-truth layer:
+      // parseFloat("9.8junk") and out-of-range scores are not measurements.
+      var rawRisk = it.risk_score;
+      var validRisk = typeof rawRisk === 'number' ||
+        (typeof rawRisk === 'string' && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(rawRisk.trim()));
+      var r = validRisk ? Number(rawRisk) : NaN;
+      if (Number.isFinite(r) && r >= 0 && r <= 10) { riskSum += r; riskN++; }
+      var h = sourceHost(it);
+      if (h) sources[h] = (sources[h] || 0) + 1;
+    });
+
+    var feedState = !feed ? 'error' : (!pub.fresh ? 'withheld' : (items.length ? 'ok' : 'empty'));
+    var mode;
+    if (feedState === 'error') mode = 'unavailable';
+    else if (!pub.fresh) mode = 'degraded';
+    else mode = feedState === 'ok' ? 'live' : 'empty';
+
+    return {
+      contract: CONTRACT,
+      mode: mode,
+      api: { reachable: !!(health || feed), health_status: health && typeof health.status === 'string' ? health.status : null },
+      publication: pub,
+      feed: { state: feedState, items: items },
+      intelligence: {
+        total: pub.fresh ? items.length : null,
+        critical: pub.fresh ? critical : null, high: pub.fresh ? high : null,
+        iocs: pub.fresh ? iocs : null,
+        avg_risk: riskN ? Math.round((riskSum / riskN) * 10) / 10 : null,
+        // Distinct publisher hosts (feed_source, else source_url, else source).
+        // Unmeasured (null) when items exist but none names its source; 0 only
+        // for a genuinely empty feed. Not actor-country attribution.
+        source_count: !pub.fresh ? null : (Object.keys(sources).length || (items.length ? null : 0)),
+        sources: sources,
+      },
+      built_at: new Date(now).toISOString(),
+    };
+  }
+
+  function ageText(seconds) {
+    if (typeof seconds !== 'number' || !isFinite(seconds) || seconds < 0) return null;
+    if (seconds < 90) return Math.round(seconds) + 's ago';
+    if (seconds < 5400) return Math.round(seconds / 60) + 'm ago';
+    if (seconds < 172800) return Math.round(seconds / 3600) + 'h ago';
+    return Math.round(seconds / 86400) + 'd ago';
+  }
+
+  function utcText(iso) {
+    var t = publicationTime(iso);
+    if (!isFinite(t)) return null;
+    return new Date(t).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+  }
+
+  /** Last Sync = the authoritative feed generation time, never an item date or page time. */
+  function lastSyncView(state) {
+    var p = state && state.publication;
+    var rel = p ? ageText(p.age_seconds) : null;
+    return { text: rel || 'N/A', utc: p ? utcText(p.generated_at) : null, known: !!rel };
+  }
+
+  /** API liveness and intelligence freshness, as two separate labels. */
+  function statusView(state) {
+    var api = state && state.api && state.api.reachable ? { state: 'ok', label: 'API ● LIVE' } : { state: 'offline', label: 'API ● UNREACHABLE' };
+    var intel;
+    if (!state || state.mode === 'unavailable') intel = { state: 'offline', label: 'INTEL ● UNAVAILABLE' };
+    else if (state.publication.fresh) intel = { state: 'ok', label: 'INTEL ● FRESH' };
+    else if (state.publication.status === 'unknown') intel = { state: 'unknown', label: 'INTEL ● UNVERIFIED' };
+    else intel = { state: 'degraded', label: 'INTEL ● DEGRADED' };
+    return { api: api, intel: intel };
+  }
+
+  /** Ticker content: bounded real items, or an explicit empty/degraded/unavailable message. */
+  function tickerView(state, limit) {
+    var n = limit || 30;
+    if (!state || state.mode === 'unavailable') return { mode: 'unavailable', message: MESSAGES.unavailable, items: [], count: null };
+    var items = state.feed.items.slice(0, n);
+    if (state.mode === 'empty') return { mode: 'empty', message: MESSAGES.empty, items: [], count: 0 };
+    if (state.mode === 'degraded') {
+      var utc = utcText(state.publication.generated_at);
+      return {
+        mode: 'degraded', items: [], count: null,
+        message: MESSAGES.degraded + ' — LAST AUTHORITATIVE UPDATE: ' + (utc || 'UNKNOWN'),
+      };
+    }
+    return { mode: 'live', message: null, items: items, count: state.intelligence.total };
+  }
+
+  /**
+   * Main intelligence panel when there is nothing to list. Stale, genuinely empty and unreachable are
+   * different situations and must not share one message. Unknown state keeps the legacy wording.
+   */
+  function emptyPanelView(state) {
+    if (state && state.mode === 'degraded') {
+      var utc = utcText(state.publication && state.publication.generated_at);
+      var age = ageText(state.publication && state.publication.age_seconds);
+      return {
+        mode: 'degraded', title: 'Live intelligence is temporarily withheld',
+        detail: 'The platform is online, but the latest verified feed is older than the freshness limit' +
+          (utc ? ' (last authoritative update: ' + utc + (age ? ', ' + age : '') + ')' : '') +
+          '. Advisories are withheld rather than shown as current, and return automatically once a fresh feed is published.',
+      };
+    }
+    if (state && state.mode === 'empty') {
+      return { mode: 'empty', title: 'No current advisories', detail: 'The authoritative feed is fresh and currently lists no advisories.' };
+    }
+    return { mode: 'unavailable', title: 'No Threat Intelligence Available', detail: 'Feed is empty or API is offline.' };
+  }
+
+  /** Preview: up to n current items, Critical/High first, else the newest others. */
+  function previewItems(state, n) {
+    var max = n || 5;
+    var items = state && state.mode === 'live' && state.feed ? state.feed.items : [];
+    var top = items.filter(function (it) { var s = sev(it); return s === 'CRITICAL' || s === 'HIGH'; }).slice(0, max);
+    return top.length ? top : items.slice(0, max);
+  }
+
+  // ── Loader (browser only) ────────────────────────────────────────────────
+  var inflight = null;
+  var last = null;
+  var lastAt = 0;
+  var listeners = [];
+
+  function fetchJSON(url, timeoutMs) {
+    var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, timeoutMs) : null;
+    return fetch(url, { cache: 'no-cache', headers: { Accept: 'application/json' }, signal: ctrl ? ctrl.signal : undefined })
+      .then(function (r) {
+        if (!r.ok) {
+          return r.json().then(function (d) { return { ok: false, status: r.status, data: d }; },
+            function () { return { ok: false, status: r.status, data: null }; });
+        }
+        return r.json().then(function (d) { return { ok: true, status: r.status, data: d }; },
+          function () { return { ok: false, status: r.status, data: null }; });
+      }, function () { return { ok: false, status: 0, data: null }; })
+      .then(function (res) { if (timer) clearTimeout(timer); return res; });
+  }
+
+  function load(opts) {
+    var force = opts && opts.force;
+    if (!force && last && Date.now() - lastAt < REUSE_MS) return Promise.resolve(last);
+    if (inflight) return inflight;
+    inflight = Promise.all([fetchJSON(HEALTH_URL, HEALTH_TIMEOUT_MS), fetchJSON(FEED_URL, FEED_TIMEOUT_MS)])
+      .then(function (r) {
+        last = build(r[0], r[1], Date.now());
+        lastAt = Date.now();
+        inflight = null;
+        listeners.slice().forEach(function (fn) { try { fn(last); } catch (e) { /* one widget must not break the rest */ } });
+        return last;
+      }, function () { inflight = null; last = build(null, null, Date.now()); lastAt = Date.now(); return last; });
+    return inflight;
+  }
+
+  function subscribe(fn) { if (typeof fn === 'function') listeners.push(fn); }
+  function current() { return last; }
+
+  var api = {
+    CONTRACT: CONTRACT, MESSAGES: MESSAGES, HEALTH_URL: HEALTH_URL, FEED_URL: FEED_URL,
+    build: build, lastSyncView: lastSyncView, statusView: statusView, tickerView: tickerView, emptyPanelView: emptyPanelView,
+    previewItems: previewItems, ageText: ageText, utcText: utcText, esc: esc, iocContribution: iocContribution,
+    load: load, subscribe: subscribe, current: current,
+  };
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  root.ApexDashboardSnapshot = api;
+})(typeof window !== 'undefined' ? window : globalThis);
