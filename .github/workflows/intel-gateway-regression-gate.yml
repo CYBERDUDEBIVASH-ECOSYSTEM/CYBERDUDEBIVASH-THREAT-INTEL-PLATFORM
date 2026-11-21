@@ -200,6 +200,11 @@ jobs:
 
       # `node --test <glob>` requires Node >= 21; pinned to 22 above, matching
       # deploy-worker.yml so a test passing here cannot fail there on runtime.
+      # P0 customer trust: prevent unsupported intelligence inventory and
+      # unverified certification claims from resurfacing after a future edit.
+      - name: "P0 public intelligence claim evidence gate (offline)"
+        run: node --test tests/public-claim-evidence-contract.test.cjs
+
       - name: "Full gateway unit suite"
         working-directory: workers/intel-gateway
         run: |
@@ -340,6 +345,21 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p test_customer_onboard_handoff.py -v
           python3 -m unittest discover -s tests -p test_customer_onboard_billing_truth.py -v
+
+      # Required offline proof for R2 publication integrity: no Cloudflare
+      # credentials, network, R2 billing, or production mutations in CI.
+      - name: "P0 R2 report delivery and catalog fail-closed regression (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_r2_integrity_head_tristate.py tests/test_p0_r2_required_delivery_truth.py
+
+      # P0: certified confidence requires in-range values and all real
+      # regression evidence. Synthetic fixtures only, no production IO.
+      - name: "P0 P26 confidence and certification integrity (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_p0_p26_certification_truth.py
+
+      # P0 root-cause negative controls: awscli return code 254 by itself
+      # never proves R2 object absence; avoid false catalog corruption.
+      - name: "P0 AWS S3 HEAD 254/404 evidence classification (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_p0_r2_head_254_is_not_missing.py
 
       - name: "Python unit tests (self-contained suites)"
         shell: bash
