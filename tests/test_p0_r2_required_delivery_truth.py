@@ -168,6 +168,33 @@ def test_tlp_withheld_in_window_report_is_not_required_in_r2(monkeypatch, tmp_pa
     assert not any("BLOCKED" in v for _, v in events)
 
 
+def test_withheld_in_window_count_and_reason_codes_are_logged(monkeypatch, tmp_path, caplog):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    items = json.loads(feed.read_text())
+    items += [
+        {"id": "intel--red", "tlp": "TLP:RED", "timestamp": _now_z(),
+         "report_url": "/reports/2026/11/intel--red.html"},
+        {"id": "intel--nolabel", "timestamp": _now_z(),
+         "report_url": "/reports/2026/11/intel--nolabel.html"},
+        # Withheld but OUT of window: must not inflate the in-window count.
+        {"id": "intel--old-red", "tlp": "TLP:RED",
+         "timestamp": (datetime.now(timezone.utc) - timedelta(hours=72))
+                      .isoformat().replace("+00:00", "Z"),
+         "report_url": "/reports/2026/11/intel--old-red.html"},
+    ]
+    feed.write_text(json.dumps(items))
+    monkeypatch.setattr(gate, "_r2_object_exists", lambda *args: True)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    with caplog.at_level("INFO", logger="sentinel.r2_integrity"):
+        assert gate.main() == 0
+    line = next(r.getMessage() for r in caplog.records
+                if "TLP policy withheld" in r.getMessage())
+    assert "withheld 2 in-window item(s)" in line
+    assert "'MISSING_LABEL': 1" in line and "'RESTRICTED_LABEL': 2" in line
+    # Ids and report content are never logged, only counts and reason codes.
+    assert "intel--red" not in line and "intel--nolabel" not in line
+
+
 def test_tlp_withheld_item_cannot_mask_real_current_loss(monkeypatch, tmp_path):
     idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
     items = json.loads(feed.read_text())
