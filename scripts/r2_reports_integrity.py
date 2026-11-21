@@ -316,6 +316,12 @@ def main() -> int:
         # references belong to the separately checked catalog continuity set.
         # Reuse the publisher helper rather than guessing from report filenames
         # or weakening the live delivery HEAD requirement.
+        # The production job runs this file as a script; pytest imports it as
+        # scripts.r2_reports_integrity. Support both entry modes without
+        # changing the publisher or its existing absolute imports.
+        scripts_dir = str(Path(__file__).resolve().parent)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
         from r2_report_publisher import build_publish_candidates, report_window_hours
         window_hours = report_window_hours()
         current_candidates = build_publish_candidates(
