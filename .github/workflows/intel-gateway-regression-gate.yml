@@ -346,6 +346,11 @@ jobs:
       - name: "P0 R2 report delivery and catalog fail-closed regression (offline)"
         run: python3 -m pytest -q --strict-markers tests/test_r2_integrity_head_tristate.py tests/test_p0_r2_required_delivery_truth.py
 
+      # P0: certified confidence requires in-range values and all real
+      # regression evidence. Synthetic fixtures only, no production IO.
+      - name: "P0 P26 confidence and certification integrity (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_p0_p26_certification_truth.py
+
       - name: "Python unit tests (self-contained suites)"
         shell: bash
         run: |
