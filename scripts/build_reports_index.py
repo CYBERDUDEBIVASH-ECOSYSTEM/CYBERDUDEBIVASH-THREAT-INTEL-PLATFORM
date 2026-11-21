@@ -552,11 +552,16 @@ def main() -> int:
     if not report_entries:
         index_payload["empty_state_message"] = EMPTY_WINDOW_MESSAGE
 
+    # A failed catalog write is a release blocker, not a cosmetic warning.
+    # Aggregate all three outcomes while preserving the pre-publication
+    # workflow barrier; never return success after a partial catalog build.
+    failed_writes: list[str] = []
     index_path = API_REPORTS / "index.json"
     if _atomic_write(index_path, index_payload):
         log.info("api/reports/index.json written: %d entries", len(report_entries))
     else:
         log.error("Failed to write api/reports/index.json")
+        failed_writes.append("index.json")
 
     # ------------------------------------------------------------------
     # 5. Write api/reports/latest.json (top MAX_LATEST for dashboard)
@@ -579,6 +584,7 @@ def main() -> int:
         log.info("api/reports/latest.json written: %d entries", len(latest_payload["reports"]))
     else:
         log.error("Failed to write api/reports/latest.json")
+        failed_writes.append("latest.json")
 
     # ------------------------------------------------------------------
     # 6. Write api/reports/stats.json (totals, severity breakdown, monthly)
@@ -607,6 +613,7 @@ def main() -> int:
         log.info("api/reports/stats.json written")
     else:
         log.error("Failed to write api/reports/stats.json")
+        failed_writes.append("stats.json")
 
     # ------------------------------------------------------------------
     # 7. Summary
@@ -625,6 +632,10 @@ def main() -> int:
     log.info("  Public URL: %s/api/reports/index.json", BASE_URL)
     log.info("=" * 70)
 
+    if failed_writes:
+        log.error("BLOCKED_CATALOG_WRITE_INCOMPLETE: %s; no publication may proceed",
+                  ", ".join(failed_writes))
+        return 2
     return 0
 
 
