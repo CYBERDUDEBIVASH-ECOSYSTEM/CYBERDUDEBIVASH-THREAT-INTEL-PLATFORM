@@ -356,6 +356,11 @@ jobs:
       - name: "P0 P26 confidence and certification integrity (offline)"
         run: python3 -m pytest -q --strict-markers tests/test_p0_p26_certification_truth.py
 
+      # P0 root-cause negative controls: awscli return code 254 by itself
+      # never proves R2 object absence; avoid false catalog corruption.
+      - name: "P0 AWS S3 HEAD 254/404 evidence classification (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_p0_r2_head_254_is_not_missing.py
+
       - name: "Python unit tests (self-contained suites)"
         shell: bash
         run: |
