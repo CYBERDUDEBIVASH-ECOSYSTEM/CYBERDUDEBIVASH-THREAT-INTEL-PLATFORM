@@ -72,12 +72,11 @@ class TestPublicationBoundaries(unittest.TestCase):
         state = {"schema_version": "1.0", "items": {}}
         patches = [
             patch.object(pub, "report_publishing_enabled", return_value=True),
-            patch.object(pub, "_load_json", return_value=[]),
-            patch.object(pub, "_get_items", return_value=[]),
+            patch.object(pub, "load_verified_publish_feed", return_value=[{"id": "intel--fixture"}]),
             patch.object(pub, "load_publish_state", return_value=state),
             patch.object(pub, "apply_tlp_gate", return_value=([], [])),
             patch.object(pub, "write_tlp_quarantine_report"),
-            patch.object(pub, "build_publish_candidates", return_value=[]),
+            patch.object(pub, "build_publish_candidates", return_value=[{"id": "intel--fixture"}]),
             patch.object(pub.R2Budgets, "from_env", return_value=budget),
             patch.object(pub, "build_plan", return_value=(plan, [{"id": "x"}], [])),
             patch.object(pub, "enforce_budget"),
