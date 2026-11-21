@@ -41,3 +41,13 @@ test("customer-facing pages keep valid document and navigation structure", () =>
     assert.match(html, /<main\b|<div class="wrap"|<div class="hero"/i, name);
   }
 });
+
+test("vendor compliance page does not masquerade as current legal, audit or plan certification", () => {
+  const html = page("compliance.html");
+  assert.doesNotMatch(html, /Every Standard\. Every Market|fully compliant with the Digital Personal Data Protection Act|93 automated compliance and quality gates|LATEST PIPELINE COMPLIANCE AUDIT|Cloudflare Enterprise/i);
+  assert.match(html, /HISTORICAL CI SNAPSHOT/i);
+  assert.match(html, /not a current production certification/i);
+  assert.match(html, /LEGAL \/ PRIVACY ASSESSMENT REQUIRED/i);
+  assert.match(html, /SOC 2 Type II readiness mapping/i);
+  assert.match(html, /VERIFY LIVE/i);
+});
