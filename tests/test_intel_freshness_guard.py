@@ -118,3 +118,69 @@ def test_200_with_healthy_active_publisher_remains_non_alerting():
     result = g.decide(health("fresh", 2), [run(15, status="in_progress")], [], NOW, health_http_status=200)
     assert result["action"] == "none"
     assert result["exit"] == 0
+
+
+def test_freshness_guard_fails_closed_when_github_run_state_cannot_be_verified(
+        monkeypatch, capsys):
+    """Never infer 'no publisher' from GitHub 401/403/429/5xx or bad JSON."""
+    import json
+    for gh_status, gh_body in (
+        (401, {"message": "Bad credentials"}),
+        (403, {"message": "API rate limit exceeded"}),
+        (429, {"message": "rate limited"}),
+        (503, None),
+        (200, {"message": "schema not a run list"}),
+        (200, {"workflow_runs": [{"id": "not-an-int", "created_at": "invalid"}]}),
+    ):
+        def fake_get_json(url, token=None):
+            if url == g.HEALTH_URL:
+                return 503, health("stale", 9)
+            return gh_status, gh_body
+
+        monkeypatch.setattr(g, "_get_json", fake_get_json)
+        monkeypatch.setattr(g, "DRY_RUN", False)
+        # A dispatch attempt would be a safety regression; forbid all outbound POST.
+        monkeypatch.setattr(g, "_open_https",
+                            lambda req, timeout: (_ for _ in ()).throw(
+                                AssertionError("unexpected GitHub dispatch")))
+        assert g.main() == 1
+        report = json.loads(capsys.readouterr().out)
+        assert report["action"] == "alert"
+        assert report["reason"] == "github_run_state_unavailable"
+
+
+def test_freshness_guard_fails_closed_if_dispatch_history_query_breaks(
+        monkeypatch, capsys):
+    import json
+    def fake_get_json(url, token=None):
+        if url == g.HEALTH_URL:
+            return 503, health("stale", 9)
+        if "event=workflow_dispatch" in url:
+            return 403, {"message": "permission denied"}
+        return 200, {"workflow_runs": []}
+
+    monkeypatch.setattr(g, "_get_json", fake_get_json)
+    monkeypatch.setattr(g, "DRY_RUN", False)
+    monkeypatch.setattr(g, "_open_https",
+                        lambda req, timeout: (_ for _ in ()).throw(
+                            AssertionError("unexpected GitHub dispatch")))
+    assert g.main() == 1
+    report = json.loads(capsys.readouterr().out)
+    assert report["reason"] == "github_run_state_unavailable"
+
+
+def test_freshness_guard_preserves_existing_recovery_when_run_state_is_verified(
+        monkeypatch, capsys):
+    import json
+    def fake_get_json(url, token=None):
+        if url == g.HEALTH_URL:
+            return 503, health("stale", 9)
+        return 200, {"workflow_runs": []}
+
+    monkeypatch.setattr(g, "_get_json", fake_get_json)
+    monkeypatch.setattr(g, "DRY_RUN", True)
+    assert g.main() == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["action"] == "dispatch"
+    assert report["reason"] == "stale_no_active_publisher"
+    assert report["dry_run"] is True
