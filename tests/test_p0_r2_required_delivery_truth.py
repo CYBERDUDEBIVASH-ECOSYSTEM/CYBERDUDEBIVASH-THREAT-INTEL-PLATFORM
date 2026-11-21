@@ -115,3 +115,53 @@ def test_all_verified_current_run_reports_can_pass_without_mutation(monkeypatch,
     assert gate.main() == 0
     assert (idx.read_bytes(), latest.read_bytes()) == before
     assert any(v.startswith("OK_purged=0") for _, v in events)
+
+
+def test_catalog_readback_mismatch_blocks_release_and_restores_local(monkeypatch, tmp_path):
+    idx, latest, _, _, events, _ = _fixture(monkeypatch, tmp_path)
+    payload = json.loads(idx.read_text())
+    payload["reports"].append({"id": "old", "path": "/reports/2025/01/intel--old.html"})
+    idx.write_text(json.dumps(payload))
+    before = (idx.read_bytes(), latest.read_bytes())
+    monkeypatch.setattr(gate, "_r2_object_exists",
+                        lambda key, *args: not key.endswith("old.html"))
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "local-test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "local-test")
+    calls = []
+    monkeypatch.setattr(gate, "_s3_cp", lambda *args: calls.append("upload") or True)
+    monkeypatch.setattr(gate, "_remote_catalog_matches", lambda *args: False)
+    assert gate.main() == 2
+    assert calls
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert any("BLOCKED_CATALOG_PUBLICATION" in v for _, v in events)
+
+
+def test_unreadable_latest_catalog_blocks_before_any_r2_operation(monkeypatch, tmp_path):
+    idx, latest, _, _, events, _ = _fixture(monkeypatch, tmp_path)
+    latest.write_text("{invalid")
+    monkeypatch.setattr(gate, "_r2_object_exists", _never_write)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    assert gate.main() == 2
+    assert any("BLOCKED_LATEST_SCHEMA" in v for _, v in events)
+
+
+def test_authenticated_catalog_readback_requires_exact_bytes(monkeypatch, tmp_path):
+    local = tmp_path / "local.json"
+    local.write_bytes(b'{"verified":true}')
+    remote_bytes = b'{"verified":true}'
+    commands = []
+    def fake_run(command, **kwargs):
+        import subprocess
+        commands.append(command)
+        # AWS 'get-object' writes the requested output file.
+        output_path = command[-1]
+        from pathlib import Path
+        Path(output_path).write_bytes(remote_bytes)
+        return subprocess.CompletedProcess(command, 0, "", "")
+    monkeypatch.setattr(gate.subprocess, "run", fake_run)
+    args = (str(local), "data", "api/reports/index.json",
+            "https://test.r2.cloudflarestorage.com", "k", "s")
+    assert gate._remote_catalog_matches(*args) is True
+    remote_bytes = b'{"verified":false}'
+    assert gate._remote_catalog_matches(*args) is False
+    assert all("--region" in c and c[c.index("--region")+1] == "auto" for c in commands)
