@@ -188,6 +188,7 @@ def _s3api_head_object(bucket: str, key: str, full: bool = False) -> Optional[di
         "--bucket", bucket,
         "--key", key,
         "--endpoint-url", R2_ENDPOINT,
+        "--region", "auto",
         "--output", "json",
     ]
     env = os.environ.copy()
@@ -218,17 +219,23 @@ def _s3api_head_object(bucket: str, key: str, full: bool = False) -> Optional[di
                 if full:
                     out["raw"] = data
                 return out
-            elif "NoSuchKey" in result.stderr or result.returncode == 254:
-                log.warning("S3 API: object not found: s3://%s/%s", bucket, key)
+            elif ("HeadObject operation" in result.stderr and
+                  any(marker in result.stderr for marker in
+                      ("(404)", "(NoSuchKey)", "(NotFound)"))):
+                # AWS CLI rc=254 denotes *any* service error, not missing.
+                # Bad region, access denial and throttling are UNKNOWN, never
+                # evidence authorizing a missing-object disposition.
+                log.warning("S3 API: confirmed not-found: s3://%s/%s", bucket, key)
                 out = {"status": 404, "content_length": 0, "etag": "", "source": "awscli_s3api"}
                 if full:
                     out["raw"] = None
                 return out
             else:
+                # Avoid propagating raw CLI diagnostic content into shared CI
+                # logs. It may contain presigned URLs or request metadata.
                 log.warning(
-                    "S3 API head-object failed (attempt %d/%d): rc=%d stderr=%s",
+                    "S3 API head-object unverifiable (attempt %d/%d): rc=%d",
                     attempt, MAX_RETRIES, result.returncode,
-                    result.stderr.strip()[:200],
                 )
         except subprocess.TimeoutExpired:
             log.warning("S3 API head-object timed out (attempt %d/%d)", attempt, MAX_RETRIES)
