@@ -2139,6 +2139,29 @@ jobs:
           exit "$PUBLISH_EXIT"
 
       # -----------------------------------------------------------------------
+      # STAGE 3.5a.1: LOCAL REPORT CATALOG CONVERGENCE BEFORE R2 HEAD GATE
+      # P0 root: 3.3.7 built an index BEFORE 3.5a published newly rendered
+      # HTML. 3.5.1 then compared current feed URLs to the pre-publish index
+      # and reported UNINDEXED despite successful report PUTs (run
+      # 44925059324). The later 5.4.0d refresh is unreachable when 3.5.1
+      # fails, deadlocking fresh feed manifest publication in 3.93.
+      #
+      # Rebuild the local catalog from the bounded publisher's *updated*
+      # state; build_reports_index.py is the sole canonical writer. Only a
+      # successful 3.5.1 authenticated R2 HEAD verification may upload this
+      # catalog. This stage has NO cloud credentials, no R2 operations, no
+      # permission increase and MUST hard fail on local/chronology errors.
+      # Keep 5.4.0d to discover late post-barrier report objects.
+      # -----------------------------------------------------------------------
+      - name: "STAGE 3.5a.1 - Pre-Integrity Local Reports Catalog Refresh (P0)"
+        if: env.PIPELINE_LOCKED != 'true'
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          python3 scripts/build_reports_index.py
+          python3 scripts/report_chronology_integrity.py --catalog api/reports/index.json
+
+      # -----------------------------------------------------------------------
       # STAGE 3.5.1: R2 REPORTS INDEX INTEGRITY GATE (v1.0 P0 PERMANENT FIX)
       # ROOT CAUSE FIX: r2_upload.py (Stage 3.5) treats HTML report upload as
       # non-fatal -- it exits 0 even when upload to sentinel-apex-reports fails.

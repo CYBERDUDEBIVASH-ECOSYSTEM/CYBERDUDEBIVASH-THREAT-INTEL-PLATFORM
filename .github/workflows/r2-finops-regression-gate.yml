@@ -149,6 +149,11 @@ jobs:
       - name: "P0 report-trio same-run R2 admission negative controls (offline)"
         run: python -m pytest tests/test_r2_report_catalog_contract_gate.py tests/test_certification_source_coverage.py -v --tb=short
 
+      # Prevent premature R2 HEAD/admission checks against a pre-publish
+      # catalog; this is an offline workflow DAG / privilege invariant.
+      - name: "P0 pre-integrity catalog refresh ordering and no-write gate"
+        run: python -m pytest tests/test_p0_report_catalog_preintegrity_order.py -v --tb=short
+
       - name: "GATE C/I -- r2_cost_guard.py budget enforcement + PRE_REVENUE_COST_MODE fail-safety"
         run: python -m pytest tests/test_r2_cost_guard.py -v --tb=short
 
