@@ -14,7 +14,12 @@ const aliases = [
 ];
 
 test("live routes dispatch to fail-closed policy before projecting old data", () => {
-  assert.ok(source.includes("import { denyNonFreshLiveFeed, liveFreshCacheControl } from"), "both runtime policy helpers imported");
+  // Assert the required two safety helpers are actually imported, but do not
+  // reject additive fail-closed helpers in the same module import.
+  const policyImport = source.split("\n").find(line =>
+    line.includes("from './stale-feed-policy.js'")) || "";
+  assert.match(policyImport, /\bdenyNonFreshLiveFeed\b/, "denyNonFreshLiveFeed must be imported");
+  assert.match(policyImport, /\bliveFreshCacheControl\b/, "liveFreshCacheControl must be imported");
   for (const route of aliases) {
     assert.ok(source.includes(route), route + " route missing");
   }
