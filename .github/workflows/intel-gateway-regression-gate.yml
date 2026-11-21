@@ -200,6 +200,11 @@ jobs:
 
       # `node --test <glob>` requires Node >= 21; pinned to 22 above, matching
       # deploy-worker.yml so a test passing here cannot fail there on runtime.
+      # P0 customer trust: prevent unsupported intelligence inventory and
+      # unverified certification claims from resurfacing after a future edit.
+      - name: "P0 public intelligence claim evidence gate (offline)"
+        run: node --test tests/public-claim-evidence-contract.test.cjs
+
       - name: "Full gateway unit suite"
         working-directory: workers/intel-gateway
         run: |
