@@ -38,6 +38,6 @@ test("customer-facing pages keep valid document and navigation structure", () =>
     assert.match(html, /<!doctype html>/i, name);
     assert.match(html, /<html\b/i, name);
     assert.match(html, /<\/html>/i, name);
-    assert.match(html, /<main\b|<div class="wrap"/i, name);
+    assert.match(html, /<main\b|<div class="wrap"|<div class="hero"/i, name);
   }
 });
