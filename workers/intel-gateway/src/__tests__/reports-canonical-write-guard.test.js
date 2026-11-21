@@ -148,3 +148,19 @@ test("P0 #725: public export router refuses unsanitized feed before serializing 
   assert.ok(block.indexOf("!publicTlpJsonVerified(feedData?.items)") <
     block.indexOf("routeExports("), "exporter must never serialize an unverified source feed");
 });
+
+
+test("P0 live premium products deny canonical and derived staleness before FREE/paid tier projection", () => {
+  const source = readFileSync(INDEX_JS_PATH, "utf-8");
+  const from = source.indexOf("async function servePremiumIntelManifest(");
+  const to = source.indexOf("async function handleLogin(", from);
+  assert.ok(from >= 0 && to > from);
+  const block = source.slice(from, to);
+  const denied = block.indexOf("denyNonFreshPremiumManifest(feedData, data)");
+  const free = block.indexOf("if (auth.tier === TIERS.FREE)");
+  const paid = block.indexOf("return jsonResp(data, 200", free);
+  assert.ok(denied >= 0 && denied < free && free < paid,
+    "must refuse stale premium input ahead of all FREE and paid responses");
+  assert.match(block, /premiumLiveFreshCacheControl\(feedData, data, 120\)/);
+  assert.match(block, /if \(premiumDenied\) return jsonResp\(premiumDenied\.body, premiumDenied\.status, premiumDenied\.headers\)/);
+});

@@ -4,7 +4,7 @@
  * Never returns the stored historical/stale item list in a LIVE route.
  * The origin feed is not mutated; historical archives remain separate.
  */
-import { publicationEnvelope, parseGeneratedAt, MAX_PUBLIC_MANIFEST_AGE_HOURS } from "./freshness-contract.js";
+import { publicationEnvelope, parseGeneratedAt, MAX_PUBLIC_MANIFEST_AGE_HOURS, classifyManifestFreshness, STATES } from "./freshness-contract.js";
 
 export function denyNonFreshLiveFeed(feed, nowMs = Date.now()) {
   const truth = publicationEnvelope(feed, nowMs, 0);
@@ -48,4 +48,60 @@ export function liveFreshCacheControl(feed, capSeconds = 120, nowMs = Date.now()
   const expiresAt = generatedMs + MAX_PUBLIC_MANIFEST_AGE_HOURS * 3600 * 1000;
   const remaining = Math.max(0, Math.floor((expiresAt - nowMs) / 1000));
   return "public, max-age=" + Math.min(capSeconds, remaining) + ", must-revalidate";
+}
+
+
+/**
+ * Live premium intelligence is published from a distinct R2 key. Its own
+ * generated_at must be fresh AND the canonical public feed must be usable.
+ * A fresh derived dashboard timestamp never heals a stale source manifest.
+ * Applies to both apex.json (items) and ai_summary.json (aggregate shape).
+ */
+export function denyNonFreshPremiumManifest(canonicalFeed, premiumManifest, nowMs = Date.now()) {
+  const canonicalDenial = denyNonFreshLiveFeed(canonicalFeed, nowMs);
+  if (canonicalDenial) return canonicalDenial;
+
+  const freshness = classifyManifestFreshness(premiumManifest?.generated_at, nowMs);
+  if (!premiumManifest || typeof premiumManifest !== "object" ||
+      Array.isArray(premiumManifest) || freshness.state !== STATES.FRESH) {
+    return {
+      status: 503,
+      headers: {
+        "Cache-Control": "no-store, max-age=0",
+        "Pragma": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+        "X-Sentinel-Freshness": freshness.state.toUpperCase(),
+        "X-Sentinel-Feed-Age-Seconds": freshness.age_seconds == null
+          ? "unknown" : String(freshness.age_seconds),
+      },
+      body: {
+        error: "live_intelligence_unavailable",
+        reason: "premium_manifest_" + freshness.state,
+        freshness_status: freshness.state.toUpperCase(),
+        generated_at: typeof premiumManifest?.generated_at === "string"
+          ? premiumManifest.generated_at : null,
+        age_seconds: freshness.age_seconds,
+        max_age_seconds: freshness.max_age_seconds,
+        live_data_available: false,
+        items: [],
+        count: 0,
+      },
+    };
+  }
+  return null;
+}
+
+/** Never cache a premium response past EITHER source's 6h expiry. */
+export function premiumLiveFreshCacheControl(canonicalFeed, premiumManifest,
+                                            capSeconds = 120, nowMs = Date.now()) {
+  if (denyNonFreshPremiumManifest(canonicalFeed, premiumManifest, nowMs)) {
+    return "no-store";
+  }
+  const earliestPublication = Math.min(
+    parseGeneratedAt(canonicalFeed.generated_at),
+    parseGeneratedAt(premiumManifest.generated_at),
+  );
+  const expiresAt = earliestPublication + MAX_PUBLIC_MANIFEST_AGE_HOURS * 3600 * 1000;
+  const secondsRemaining = Math.max(0, Math.floor((expiresAt - nowMs) / 1000));
+  return "public, max-age=" + Math.min(capSeconds, secondsRemaining) + ", must-revalidate";
 }

@@ -164,7 +164,7 @@ import { classifyManifestFreshness, evaluatePublicIntelligence, healthEdgeTtlSec
 // Cyber Watchdog v3: feed freshness envelope, autonomous evaluation, signed
 // verified webhooks, browser sessions, MSSP tenants.
 import { publicationEnvelope } from './freshness-contract.js';
-import { denyNonFreshLiveFeed, liveFreshCacheControl } from './stale-feed-policy.js';
+import { denyNonFreshLiveFeed, liveFreshCacheControl, denyNonFreshPremiumManifest, premiumLiveFreshCacheControl } from './stale-feed-policy.js';
 import { runWatchdogCycle } from './watchdog-scheduler.js';
 import { generateSigningSecret, resolveAndValidate, runVerificationChallenge } from './watchdog-webhook.js';
 import { SESSION_POLICY as WATCHDOG_SESSION_POLICY, webhookDeliveryEnabled } from './watchdog-policy.js';
@@ -2621,13 +2621,18 @@ async function servePremiumIntelManifest(request, env, ctx, pathname) {
   if (!publicTlpJsonVerified(data)) {
     return jsonResp({ error: "verified_intelligence_unavailable" }, 503, { "Cache-Control": "no-store" });
   }
+  // P0: premium R2 objects can be newer than stale canonical intelligence.
+  // Require BOTH source and derived product freshness before ANY tier output.
+  const premiumDenied = denyNonFreshPremiumManifest(feedData, data);
+  if (premiumDenied) return jsonResp(premiumDenied.body, premiumDenied.status, premiumDenied.headers);
+  const cacheControl = premiumLiveFreshCacheControl(feedData, data, 120);
   if (auth.tier === TIERS.FREE) {
     const preview = maskForFreeTier(data);
     preview._auth_tier   = TIERS.FREE;
     preview._upgrade_url = "https://intel.cyberdudebivash.com/upgrade.html";
-    return jsonResp(preview, 200, { "Cache-Control": "public, max-age=120" });
+    return jsonResp(preview, 200, { "Cache-Control": cacheControl });
   }
-  return jsonResp(data, 200, { "Cache-Control": "private, max-age=120" });
+  return jsonResp(data, 200, { "Cache-Control": cacheControl.replace(/^public,/, "private,") });
 }
 
 // =============================================================================
