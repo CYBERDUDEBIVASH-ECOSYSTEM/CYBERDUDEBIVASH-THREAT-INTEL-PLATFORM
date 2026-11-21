@@ -348,6 +348,11 @@ jobs:
 
       # Required offline proof for R2 publication integrity: no Cloudflare
       # credentials, network, R2 billing, or production mutations in CI.
+      # Fail-closed self-healing CI truth is a production-readiness invariant.
+      # Synthetic subprocess cases only; no GitHub dispatch or Cloudflare.
+      - name: "P0 self-healing workflow verdict negative controls (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_p0_self_healing_release_truth.py
+
       - name: "P0 R2 report delivery and catalog fail-closed regression (offline)"
         run: python3 -m pytest -q --strict-markers tests/test_r2_integrity_head_tristate.py tests/test_p0_r2_required_delivery_truth.py
 
