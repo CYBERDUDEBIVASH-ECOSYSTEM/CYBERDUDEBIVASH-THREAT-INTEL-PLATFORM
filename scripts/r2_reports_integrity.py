@@ -54,6 +54,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -334,8 +335,14 @@ def main() -> int:
         # withheld advisory. Fail-closed is preserved: tlp_policy denies on any
         # policy fault, and an empty obligation set still raises below.
         publishable, _withheld = apply_tlp_gate(items, {})
-        current_candidates = build_publish_candidates(
-            publishable, window_hours, datetime.now(timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        current_candidates = build_publish_candidates(publishable, window_hours, now_utc)
+        # Observability only (does not influence the verdict): how many
+        # in-window items the policy withheld, so an operator can tell a
+        # TLP-withheld backlog from genuinely missing reports in one log line.
+        in_window_withheld = (
+            len(build_publish_candidates(items, window_hours, now_utc))
+            - len(current_candidates)
         )
         for candidate in current_candidates:
             item = candidate["item"]
@@ -352,6 +359,12 @@ def main() -> int:
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_CURRENT_FEED_EVIDENCE")
         return 2
     log.info("Current report URLs within publisher %dh window: %d (api/feed.json)", window_hours, len(current_run_keys))
+    log.info(
+        "TLP policy withheld %d in-window item(s) from the delivery obligation "
+        "(publisher never uploads them); feed-wide withheld reason codes: %s",
+        in_window_withheld,
+        dict(sorted(Counter(r.get("reason_code", "UNKNOWN") for r in _withheld).items())),
+    )
 
     # --- Load latest.json up front (needed both to build the check set below
     #     and to purge it later) so its own entries -- which are not
