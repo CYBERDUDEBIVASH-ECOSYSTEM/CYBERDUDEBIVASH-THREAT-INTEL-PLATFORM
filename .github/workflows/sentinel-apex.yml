@@ -2155,6 +2155,7 @@ jobs:
       #      mechanism is broken -- credentials invalid or bucket unreachable).
       # -----------------------------------------------------------------------
       - name: "STAGE 3.5.1 - R2 Reports Index Integrity Gate (v1.0 P0 Permanent Fix)"
+        id: r2-reports-index-integrity
         timeout-minutes: 10
         env:
           CF_R2_REPORTS_KEY_ID:     ${{ secrets.CF_R2_REPORTS_KEY_ID }}
@@ -5103,7 +5104,11 @@ jobs:
       # the pipeline (existing R2 data remains valid; next run retries).
       # -----------------------------------------------------------------------
       - name: "STAGE 5.9.6 - P40.0 Late R2 Sync"
-        if: always()
+        # P0: This is a remote R2 write. Unlike read-only telemetry, it must
+        # never run after a failed stage or cancelled workflow. Run #44874914578
+        # reached this step despite a failed Stage 3.5.1. Fail closed and
+        # require both authenticated R2 integrity gates before any P40 upload.
+        if: ${{ success() && steps.r2-manifest-integrity.outcome == 'success' && steps.r2-reports-index-integrity.outcome == 'success' }}
         timeout-minutes: 5
         continue-on-error: true
         run: python3 scripts/r2_upload.py --p40-only || true
