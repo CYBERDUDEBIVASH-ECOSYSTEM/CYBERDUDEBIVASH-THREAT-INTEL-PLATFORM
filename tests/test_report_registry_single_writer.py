@@ -130,6 +130,10 @@ class TestR2ReportsIntegrityPurgeConsistency:
             "tlp": "TLP:CLEAR",  # publishable, so the gate owes delivery for it
         }])
 
+        from tests.r2_publish_state_helper import mark_published
+        mark_published(monkeypatch, tmp_path,
+                       [("intel--a", _current_report_path("intel--a"))])
+
         # intel--b is missing from R2 (e.g. its upload silently failed).
         monkeypatch.setattr(
             integrity, "_r2_object_exists",
@@ -177,6 +181,10 @@ class TestR2ReportsIntegrityPurgeConsistency:
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "tlp": "TLP:CLEAR",  # publishable, so the gate owes delivery for it
         }])
+
+        from tests.r2_publish_state_helper import mark_published
+        mark_published(monkeypatch, tmp_path,
+                       [("intel--a", _current_report_path("intel--a"))])
 
         # Only intel--z is missing from R2; intel--a is fine.
         monkeypatch.setattr(
