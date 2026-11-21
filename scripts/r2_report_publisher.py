@@ -403,10 +403,13 @@ def build_plan(
             else:
                 is_new = "html_sha256" not in prior
                 plan.record_new() if is_new else plan.record_changed()
+                html_size = html_path.stat().st_size
                 put_ops.append({
                     "id": intel_id, "kind": "html", "local_path": html_path,
-                    "key": html_rel_key, "sha256": html_sha, "size": html_path.stat().st_size,
+                    "key": html_rel_key, "sha256": html_sha, "size": html_size,
                 })
+                # Every planned R2 PUT must be charged BEFORE enforce_budget().
+                plan.record_put(nbytes=html_size)
         # else: not yet rendered on disk -- generate_intel_reports.py's own
         # earlier pipeline stage owns rendering; this script never renders.
 
@@ -416,10 +419,14 @@ def build_plan(
             pdf_sha = _sha256_file(pdf_path)
             pdf_rel_key = str(pdf_path.relative_to(REPO_ROOT))
             if prior.get("pdf_sha256") != pdf_sha:
+                pdf_size = pdf_path.stat().st_size
                 put_ops.append({
                     "id": intel_id, "kind": "pdf", "local_path": pdf_path,
-                    "key": pdf_rel_key, "sha256": pdf_sha, "size": pdf_path.stat().st_size,
+                    "key": pdf_rel_key, "sha256": pdf_sha, "size": pdf_size,
                 })
+                # PDFs consume billable PUTs even though they're not new
+                # intelligence items. Count their bytes and operations too.
+                plan.record_put(nbytes=pdf_size)
             # PDFs are a secondary artifact of the same report candidate --
             # contribute to PUT/bytes_uploaded when they need publishing,
             # but intentionally do not get their own new/changed/unchanged
@@ -509,6 +516,11 @@ def build_plan(
             "MAX_REPORT_DELETIONS_PER_RUN=%s (oldest retired first; new-report publishing proceeds).",
             deferred, max_deletes,
         )
+
+    # R2 FinOps fail-closed assertion: unaccounted PUTs can otherwise bypass
+    # MAX_REPORT_UPLOADS_PER_RUN and understate Class A operation telemetry.
+    if plan.put != len(put_ops) or plan.bytes_uploaded != sum(op["size"] for op in put_ops):
+        raise ValueError("BLOCKED_R2_PUBLISH_PLAN_ACCOUNTING_MISMATCH")
 
     return plan, put_ops, delete_ops
 
