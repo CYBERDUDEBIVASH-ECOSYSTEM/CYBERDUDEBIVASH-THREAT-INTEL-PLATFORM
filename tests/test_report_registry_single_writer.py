@@ -84,9 +84,13 @@ class TestR2ReportsIntegrityPurgeConsistency:
         monkeypatch.setenv("CF_ACCOUNT_ID", "test-account")
         monkeypatch.setenv("CF_R2_REPORTS_KEY_ID", "test-key")
         monkeypatch.setenv("CF_R2_REPORTS_SECRET_KEY", "test-secret")
-        monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
-        monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+        # An authenticated catalog writer is mandatory for successful cleanup.
+        # Simulate both upload and independent remote-byte readback in this
+        # historical cleanup test; never weaken the production release gate.
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "local-test-data-key")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "local-test-data-secret")
         monkeypatch.setattr(integrity, "_s3_cp", lambda *a, **k: True)
+        monkeypatch.setattr(integrity, "_remote_catalog_matches", lambda *a, **k: True)
 
     def _patch_paths(self, tmp_path, monkeypatch):
         monkeypatch.setattr(integrity, "INDEX_PATH", tmp_path / "api" / "reports" / "index.json")
@@ -112,7 +116,10 @@ class TestR2ReportsIntegrityPurgeConsistency:
                 {"id": "intel--b", "path": "/reports/2026/08/intel--b.html"},
             ],
         })
-        _write_json(integrity.FEED_PATH, [])
+        _write_json(integrity.FEED_PATH, [{
+            "id": "intel--a",
+            "report_url": "/reports/2026/08/intel--a.html",
+        }])
 
         # intel--b is missing from R2 (e.g. its upload silently failed).
         monkeypatch.setattr(
@@ -155,7 +162,10 @@ class TestR2ReportsIntegrityPurgeConsistency:
             "schema_version": "1.0", "total_reports": 1, "reports_listed": 1,
             "reports": [{"id": "intel--z", "path": "/reports/2026/08/intel--z.html"}],
         })
-        _write_json(integrity.FEED_PATH, [])
+        _write_json(integrity.FEED_PATH, [{
+            "id": "intel--a",
+            "report_url": "/reports/2026/08/intel--a.html",
+        }])
 
         # Only intel--z is missing from R2; intel--a is fine.
         monkeypatch.setattr(

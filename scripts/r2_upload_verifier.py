@@ -59,7 +59,6 @@ import hashlib
 import json
 import logging
 import os
-import subprocess
 import sys
 import tempfile
 import time
@@ -162,90 +161,93 @@ def _find_sync_meta() -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 def _s3api_head_object(bucket: str, key: str, full: bool = False) -> Optional[dict]:
-    """
-    BUG 3 FIX: Use awscli s3api head-object (authenticated) to check an R2 object.
-    This is the CORRECT method for private R2 buckets.
-    Unauthenticated HTTP HEAD returns HTTP 400 on private R2 buckets.
+    """Read R2 HEAD via an authenticated native S3 client, without a shell.
 
-    full=False (default, unchanged): returns the trimmed
-    {status, content_length, etag, source} dict this function has always
-    returned -- every existing caller (this module's own verify_r2_object(),
-    r2_reports_verifier.py) keeps getting exactly that shape.
-
-    full=True: also includes "raw", the complete parsed head-object JSON
-    (LastModified/ContentType/CacheControl/Metadata/etc.), for callers that
-    need metadata this function otherwise discards (e.g. a forensic
-    diagnostic). Reuse-before-build: extends this primitive instead of a
-    second implementation duplicating the same credential/retry/subprocess
-    logic elsewhere.
+    Only an explicit HeadObject 404 / NoSuchKey / NotFound response proves
+    absence. All authorization, region, transport, timeout, and malformed
+    response failures are UNKNOWN and cannot authorize catalog mutation.
+    The default result shape and optional full metadata remain compatible
+    with report publication/forensic consumers.
     """
     if not CF_ACCOUNT_ID or not ACCESS_KEY or not SECRET_KEY:
-        log.warning("S3 credentials absent -- cannot perform S3 API head-object check")
+        log.warning("S3 credentials absent -- cannot perform R2 head-object check")
         return None
 
-    cmd = [
-        "aws", "s3api", "head-object",
-        "--bucket", bucket,
-        "--key", key,
-        "--endpoint-url", R2_ENDPOINT,
-        "--region", "auto",
-        "--output", "json",
-    ]
-    env = os.environ.copy()
-    env["AWS_ACCESS_KEY_ID"]     = ACCESS_KEY
-    env["AWS_SECRET_ACCESS_KEY"] = SECRET_KEY
-    env["AWS_DEFAULT_REGION"]    = "auto"
+    try:
+        import boto3
+        from botocore.config import Config
+        from botocore.exceptions import ClientError
+    except ImportError:
+        log.warning("Native S3 client unavailable -- R2 HEAD remains unverified")
+        return None
+
+    try:
+        client = boto3.client(
+            "s3",
+            endpoint_url=R2_ENDPOINT,
+            region_name="auto",
+            aws_access_key_id=ACCESS_KEY,
+            aws_secret_access_key=SECRET_KEY,
+            config=Config(
+                signature_version="s3v4",
+                connect_timeout=REQUEST_TIMEOUT,
+                read_timeout=REQUEST_TIMEOUT,
+                retries={"total_max_attempts": 1, "mode": "standard"},
+            ),
+        )
+    except Exception:
+        # Do not print SDK exceptions; request metadata can be sensitive.
+        log.warning("Native R2 HEAD client initialization failed")
+        return None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                timeout=REQUEST_TIMEOUT, env=env,
-            )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
-                content_length = int(data.get("ContentLength") or 0)
-                etag = (data.get("ETag") or "").strip('"')
-                log.info(
-                    "S3 API head-object OK: s3://%s/%s -- size=%d bytes, etag=%s",
-                    bucket, key, content_length, etag[:16] if etag else "N/A",
-                )
-                out = {
-                    "status":         200,
-                    "content_length": content_length,
-                    "etag":           etag,
-                    "source":         "awscli_s3api",
+            data = client.head_object(Bucket=bucket, Key=key)
+            if not isinstance(data, dict):
+                raise ValueError("invalid HeadObject response type")
+            content_length = int(data.get("ContentLength") or 0)
+            etag = str(data.get("ETag") or "").strip('"')
+            log.info("Authenticated R2 head-object verified: %d bytes", content_length)
+            result = {
+                "status": 200,
+                "content_length": content_length,
+                "etag": etag,
+                "source": "boto3_s3api",
+            }
+            if full:
+                result["raw"] = data
+            return result
+        except ClientError as exc:
+            response = exc.response if isinstance(exc.response, dict) else {}
+            error = response.get("Error") or {}
+            metadata = response.get("ResponseMetadata") or {}
+            code = str(error.get("Code") or "") if isinstance(error, dict) else ""
+            http_status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
+            if http_status == 404 and code in ("404", "NoSuchKey", "NotFound"):
+                log.warning("Authenticated R2 HeadObject confirmed object absence")
+                result = {
+                    "status": 404,
+                    "content_length": 0,
+                    "etag": "",
+                    "source": "boto3_s3api",
                 }
                 if full:
-                    out["raw"] = data
-                return out
-            elif ("HeadObject operation" in result.stderr and
-                  any(marker in result.stderr for marker in
-                      ("(404)", "(NoSuchKey)", "(NotFound)"))):
-                # AWS CLI rc=254 denotes *any* service error, not missing.
-                # Bad region, access denial and throttling are UNKNOWN, never
-                # evidence authorizing a missing-object disposition.
-                log.warning("S3 API: confirmed not-found: s3://%s/%s", bucket, key)
-                out = {"status": 404, "content_length": 0, "etag": "", "source": "awscli_s3api"}
-                if full:
-                    out["raw"] = None
-                return out
-            else:
-                # Avoid propagating raw CLI diagnostic content into shared CI
-                # logs. It may contain presigned URLs or request metadata.
-                log.warning(
-                    "S3 API head-object unverifiable (attempt %d/%d): rc=%d",
-                    attempt, MAX_RETRIES, result.returncode,
-                )
-        except subprocess.TimeoutExpired:
-            log.warning("S3 API head-object timed out (attempt %d/%d)", attempt, MAX_RETRIES)
-        except Exception as e:
-            log.warning("S3 API head-object error (attempt %d/%d): %s", attempt, MAX_RETRIES, e)
+                    result["raw"] = None
+                return result
+            log.warning(
+                "Authenticated R2 HeadObject unverified (attempt %d/%d)",
+                attempt, MAX_RETRIES,
+            )
+        except Exception:
+            log.warning(
+                "Native R2 HeadObject failed (attempt %d/%d)",
+                attempt, MAX_RETRIES,
+            )
+
         if attempt < MAX_RETRIES:
             time.sleep(RETRY_DELAY)
 
     return None
-
 
 def _boto3_head_object(bucket: str, key: str) -> Optional[dict]:
     """boto3 fallback for S3 API head-object (same authenticated approach)."""

@@ -244,3 +244,24 @@ def test_workflow_verifies_uploaded_manifest_before_report_retirement(tmp_path):
             ok, _, details = verifier.verify_r2_object()
         assert ok is False
         assert details["reason_code"] in ("PUBLIC_BYTE_LENGTH_MISMATCH", "PUBLIC_ETAG_MISMATCH")
+
+
+def test_p40_late_remote_sync_must_not_run_after_any_integrity_failure():
+    """An always() R2 PUT after a failed gate bypasses release containment."""
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/sentinel-apex.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["generate-and-sync"]["steps"]
+    by_name = {s.get("name"): (i, s) for i, s in enumerate(steps)}
+    index_id, index_step = by_name[
+        "STAGE 3.5.1 - R2 Reports Index Integrity Gate (v1.0 P0 Permanent Fix)"
+    ]
+    late_id, late = by_name["STAGE 5.9.6 - P40.0 Late R2 Sync"]
+    assert index_id < late_id
+    assert index_step["id"] == "r2-reports-index-integrity"
+    guard = str(late.get("if", ""))
+    assert "always()" not in guard
+    assert "success()" in guard
+    assert "steps.r2-manifest-integrity.outcome == 'success'" in guard
+    assert "steps.r2-reports-index-integrity.outcome == 'success'" in guard
+    assert "scripts/r2_upload.py --p40-only" in late["run"]
