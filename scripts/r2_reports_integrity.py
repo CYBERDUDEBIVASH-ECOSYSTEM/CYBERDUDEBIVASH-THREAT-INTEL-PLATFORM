@@ -47,11 +47,13 @@ ENVIRONMENT (consumed):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -209,8 +211,43 @@ def _s3_cp(
     if result.returncode == 0:
         log.info("OK: uploaded %s -> s3://%s/%s", local_path, bucket, key)
         return True
-    log.warning("WARN: upload failed (%d): %s", result.returncode, result.stderr.strip()[:300])
+    # Do not reflect AWS CLI stderr (which may contain request metadata,
+    # authentication material, or presigned URLs) in shared Actions logs.
+    log.error("R2 catalog upload failed (nonzero exit)")
     return False
+
+
+def _remote_catalog_matches(local_path: str, bucket: str, key: str,
+                            endpoint: str, key_id: str, secret: str) -> bool:
+    """Bounded read-after-write proof; a successful CLI upload is insufficient.
+
+    Verify actual customer bucket bytes rather than relying on an ETag:
+    multipart upload and encryption can make ETags non-MD5 identifiers.
+    Called only for catalogs changed in this run (at most two objects).
+    """
+    env = os.environ.copy()
+    env["AWS_ACCESS_KEY_ID"] = key_id
+    env["AWS_SECRET_ACCESS_KEY"] = secret
+    try:
+        with tempfile.TemporaryDirectory(prefix="cdb-r2-catalog-") as folder:
+            remote = Path(folder) / "catalog.json"
+            result = subprocess.run(
+                ["aws", "s3api", "get-object", "--bucket", bucket,
+                 "--key", key, "--endpoint-url", endpoint,
+                 "--region", R2_S3_REGION, str(remote)],
+                capture_output=True, text=True, env=env, timeout=60,
+            )
+            if result.returncode != 0 or not remote.is_file():
+                return False
+            def digest(path: Path) -> str:
+                h = hashlib.sha256()
+                with path.open("rb") as stream:
+                    while chunk := stream.read(128 * 1024):
+                        h.update(chunk)
+                return h.hexdigest()
+            return digest(Path(local_path)) == digest(remote)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -298,12 +335,21 @@ def main() -> int:
     #     be detected or purged by this gate.
     latest_data: Optional[dict] = None
     latest_reports_raw: List[dict] = []
-    if LATEST_PATH.exists():
-        try:
-            latest_data = json.loads(LATEST_PATH.read_text(encoding="utf-8"))
-            latest_reports_raw = latest_data.get("reports", [])
-        except Exception as exc:
-            log.warning("Could not read api/reports/latest.json: %s (non-fatal)", exc)
+    if not LATEST_PATH.is_file():
+        log.error("Required latest customer catalog is absent")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_NO_LATEST")
+        return 2
+    try:
+        latest_data = json.loads(LATEST_PATH.read_text(encoding="utf-8"))
+        if not isinstance(latest_data, dict) or not isinstance(latest_data.get("reports"), list):
+            raise ValueError("invalid latest report catalog")
+        latest_reports_raw = latest_data["reports"]
+        if any(not isinstance(e, dict) for e in latest_reports_raw):
+            raise ValueError("invalid latest report entries")
+    except (OSError, ValueError, TypeError):
+        log.error("Required latest customer catalog is unreadable or invalid")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_LATEST_SCHEMA")
+        return 2
 
     # --- Select entries to check (most recent MAX_CHECK + all current-run) ---
     entries_to_check = all_entries[:MAX_CHECK]
@@ -506,6 +552,8 @@ def main() -> int:
                 if changed:
                     try:
                         if not _s3_cp(str(local_p), BUCKET_DATA, rel, endpoint, data_key, data_sec):
+                            publication_failed = True
+                        elif not _remote_catalog_matches(str(local_p), BUCKET_DATA, rel, endpoint, data_key, data_sec):
                             publication_failed = True
                     except (OSError, subprocess.TimeoutExpired):
                         publication_failed = True
