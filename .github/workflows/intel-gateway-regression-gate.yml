@@ -341,6 +341,11 @@ jobs:
           python3 -m unittest discover -s tests -p test_customer_onboard_handoff.py -v
           python3 -m unittest discover -s tests -p test_customer_onboard_billing_truth.py -v
 
+      # Required offline proof for R2 publication integrity: no Cloudflare
+      # credentials, network, R2 billing, or production mutations in CI.
+      - name: "P0 R2 report delivery and catalog fail-closed regression (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_r2_integrity_head_tristate.py tests/test_p0_r2_required_delivery_truth.py
+
       - name: "Python unit tests (self-contained suites)"
         shell: bash
         run: |
