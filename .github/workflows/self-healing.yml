@@ -120,3 +120,22 @@ jobs:
           cat /tmp/healing_output.txt 2>/dev/null | tail -20 || true
           echo "============================================================"
           python3 scripts/self_healing_engine.py status 2>&1 | tail -10 || true
+
+      # P0: a 503/failed recovery is not a successful production healing pass.
+      # Preserve diagnostic and alert steps above, then fail the workflow
+      # using the engine's actual PIPESTATUS rather than tee's exit code.
+      # Do not grant actions:write or dispatch additional data writers here.
+      - name: "P0 — Enforce customer self-healing truth"
+        if: always()
+        timeout-minutes: 1
+        env:
+          HEALING_STATUS: ${{ steps.healing.outputs.status }}
+          HEALING_EXIT_CODE: ${{ steps.healing.outputs.exit_code }}
+        run: |
+          STATUS="${HEALING_STATUS:-unknown}"
+          EXIT="${HEALING_EXIT_CODE:-unknown}"
+          if [ "$STATUS" != "healthy" ] || [ "$EXIT" != "0" ]; then
+            echo "::error title=P0 Self-Healing Unrecovered::Self-healing ended status=$STATUS exit=$EXIT; production readiness remains HOLD."
+            exit 1
+          fi
+          echo "P0 self-healing result verified: healthy and exit 0."
