@@ -226,14 +226,14 @@ def main() -> int:
     cf_account, reports_key, reports_sec, data_key, data_sec = _get_credentials()
 
     if not cf_account:
-        log.warning("CF_ACCOUNT_ID not set -- skipping R2 integrity check (non-fatal)")
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "SKIP_NO_ACCOUNT_ID")
-        return 0
+        log.error("R2 required integrity proof unavailable: no Cloudflare account")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_NO_ACCOUNT_ID")
+        return 2
 
     if not reports_key or not reports_sec:
-        log.warning("No R2 credentials available -- skipping integrity check (non-fatal)")
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "SKIP_NO_CREDENTIALS")
-        return 0
+        log.error("R2 required integrity proof unavailable: missing reports credentials")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_NO_CREDENTIALS")
+        return 2
 
     endpoint = f"https://{cf_account}.r2.cloudflarestorage.com"
     log.info("R2 endpoint : %s", endpoint)
@@ -241,40 +241,52 @@ def main() -> int:
 
     # --- Load index ---
     if not INDEX_PATH.exists():
-        log.warning("api/reports/index.json not found -- skipping (non-fatal)")
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "SKIP_NO_INDEX")
-        return 0
+        log.error("R2 required integrity proof unavailable: missing customer catalog")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_NO_INDEX")
+        return 2
 
     try:
         index_data = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
-    except Exception as exc:
-        log.error("Failed to read api/reports/index.json: %s (non-fatal)", exc)
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "ERROR_READ_INDEX")
-        return 0
+    except (OSError, ValueError, TypeError):
+        log.error("R2 required integrity proof unavailable: invalid customer catalog")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_READ_INDEX")
+        return 2
 
-    all_entries: List[dict] = index_data.get("reports", [])
-    if not all_entries:
-        log.info("Index has no entries -- nothing to verify")
-        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "OK_EMPTY_INDEX")
-        return 0
+    if not isinstance(index_data, dict) or not isinstance(index_data.get("reports"), list):
+        log.error("R2 catalog schema invalid; no customer delivery verification possible")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_CATALOG_SCHEMA")
+        return 2
+    all_entries: List[dict] = index_data["reports"]
+    if not all_entries or any(not isinstance(e, dict) for e in all_entries):
+        log.error("R2 customer catalog empty or contains invalid entries")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_EMPTY_OR_INVALID_INDEX")
+        return 2
 
     log.info("Index entries: %d total", len(all_entries))
 
     # --- Identify current-run report keys from api/feed.json ---
     current_run_keys: Set[str] = set()
-    if FEED_PATH.exists():
-        try:
-            feed = json.loads(FEED_PATH.read_text(encoding="utf-8"))
-            items = feed if isinstance(feed, list) else []
-            for item in items:
-                ru = item.get("report_url", "")
-                if ru:
-                    key = _path_to_r2_key(ru)
-                    if key:
-                        current_run_keys.add(key)
-            log.info("Current-run report URLs: %d (from api/feed.json)", len(current_run_keys))
-        except Exception as exc:
-            log.warning("Could not read api/feed.json: %s (non-fatal)", exc)
+    try:
+        feed = json.loads(FEED_PATH.read_text(encoding="utf-8"))
+        items = feed if isinstance(feed, list) else (
+            feed.get("items") if isinstance(feed, dict) else None
+        )
+        if not isinstance(items, list) or not items or any(not isinstance(i, dict) for i in items):
+            raise ValueError("invalid feed schema")
+        for item in items:
+            ru = item.get("report_url") or item.get("internal_report_url")
+            if ru:
+                key = _path_to_r2_key(ru) if isinstance(ru, str) else None
+                if not key:
+                    raise ValueError("invalid report path in feed")
+                current_run_keys.add(key)
+        if not current_run_keys:
+            raise ValueError("no current report URLs")
+    except (OSError, ValueError, TypeError):
+        log.error("R2 required integrity proof unavailable: feed or report URL evidence invalid")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_CURRENT_FEED_EVIDENCE")
+        return 2
+    log.info("Current-run report URLs: %d (from api/feed.json)", len(current_run_keys))
 
     # --- Load latest.json up front (needed both to build the check set below
     #     and to purge it later) so its own entries -- which are not
@@ -310,14 +322,15 @@ def main() -> int:
             entry_key_map[r2_key] = entry
 
     # Also include any current-run keys not already in the checked set
+    indexed_keys = {
+        key for entry in all_entries
+        if (key := _path_to_r2_key(entry.get("path", "") or entry.get("url", "")))
+    }
+    unindexed_current = current_run_keys - indexed_keys
     for ck in current_run_keys:
-        if ck not in entry_key_map:
-            # Find from all_entries by key
-            for entry in all_entries:
-                candidate_key = _path_to_r2_key(entry.get("path", "") or entry.get("url", ""))
-                if candidate_key == ck:
-                    entry_key_map[ck] = entry
-                    break
+        # Never omit a feed-referenced object from authenticated HEAD simply
+        # because the customer catalog has no corresponding entry.
+        entry_key_map.setdefault(ck, {"path": "/" + ck})
 
     # Also include latest.json's own entries, even if absent from index.json's
     # checked window (see v1.1 FIX note above).
@@ -327,6 +340,10 @@ def main() -> int:
             entry_key_map[lk] = entry
 
     all_keys_to_check = list(entry_key_map.keys())
+    if len(all_keys_to_check) > 500:
+        log.error("Required R2 HEAD count exceeds bounded gate budget; no catalog mutation")
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_HEAD_BUDGET")
+        return 2
     log.info("Dispatching %d parallel R2 head-object checks (workers=%d)...",
              len(all_keys_to_check), MAX_WORKERS)
 
@@ -385,7 +402,20 @@ def main() -> int:
                           f"HARD_FAIL_all_{len(current_missing)}_current_run_reports_missing")
         return 1
 
+    # Current-run delivery requires ALL reports, not merely one success.
+    # A feed-only key also means the customer catalog lacks a required URL.
+    # Both conditions block before any local or remote catalog mutation.
+    if current_missing or unindexed_current:
+        log.error("BLOCKED: %d missing current-run R2 objects; %d unindexed current-run objects; catalogs unchanged",
+                  len(current_missing), len(unindexed_current))
+        _write_github_env("R2_REPORTS_INTEGRITY_STATUS",
+                          f"BLOCKED_CURRENT_REPORTS_missing_{len(current_missing)}_unindexed_{len(unindexed_current)}")
+        return 1
+
     # --- Purge stale entries from index ---
+    # Cache original bytes for rollback if any local write or R2 upload fails.
+    original_index = INDEX_PATH.read_bytes()
+    original_latest = LATEST_PATH.read_bytes() if LATEST_PATH.exists() else None
     clean_entries: List[dict] = []
     purged_count = 0
 
@@ -462,18 +492,34 @@ def main() -> int:
         except Exception as exc:
             log.warning("Could not update api/reports/latest.json: %s (non-fatal)", exc)
 
-    # Re-upload whichever cleaned file(s) actually changed to R2 sentinel-apex-data
+    # A successful local catalog cleanup is not proof of successful remote
+    # customer publication. Roll back local bytes on any upload failure.
+    publication_failed = False
     if index_changed or latest_changed:
-        if data_key and data_sec:
-            log.info("Re-uploading cleaned index files to R2 (sentinel-apex-data)...")
+        if not (data_key and data_sec):
+            publication_failed = True
+        else:
             for rel, local_p, changed in [
-                ("api/reports/index.json",  INDEX_PATH,  index_changed),
+                ("api/reports/index.json", INDEX_PATH, index_changed),
                 ("api/reports/latest.json", LATEST_PATH, latest_changed),
             ]:
-                if changed and local_p.exists():
-                    _s3_cp(str(local_p), BUCKET_DATA, rel, endpoint, data_key, data_sec)
-        else:
-            log.warning("WARN: No data bucket credentials -- cannot re-upload cleaned index to R2")
+                if changed:
+                    try:
+                        if not _s3_cp(str(local_p), BUCKET_DATA, rel, endpoint, data_key, data_sec):
+                            publication_failed = True
+                    except (OSError, subprocess.TimeoutExpired):
+                        publication_failed = True
+        if publication_failed:
+            log.error("BLOCKED: cleaned customer catalog upload not confirmed; local catalog rollback required")
+            try:
+                if index_changed:
+                    INDEX_PATH.write_bytes(original_index)
+                if latest_changed and original_latest is not None:
+                    LATEST_PATH.write_bytes(original_latest)
+            except OSError:
+                log.error("BLOCKED: local catalog rollback failed; manual recovery required")
+            _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_CATALOG_PUBLICATION")
+            return 2
 
     # --- Determine exit status ---
     # HARD FAIL only when ALL current-run reports are missing from R2.
