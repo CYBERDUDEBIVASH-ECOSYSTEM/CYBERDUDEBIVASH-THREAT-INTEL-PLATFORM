@@ -22,8 +22,12 @@ def _fixture(monkeypatch, tmp_path):
     # These are deliberately fresh: the publisher only owes report delivery
     # for the canonical rolling window, never every historical feed row.
     fresh_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    # Production feed items carry a TLP label (STAGE 3.1.0b backfill). The
+    # publisher withholds unlabelled/restricted items, so a realistic fixture
+    # must label the items it expects to be published.
     feed.write_text(json.dumps([
-        {"id": row["id"], "report_url": row["path"], "timestamp": fresh_ts}
+        {"id": row["id"], "report_url": row["path"], "timestamp": fresh_ts,
+         "tlp": "TLP:CLEAR"}
         for row in reports
     ]))
     for name, p in [("INDEX_PATH", index), ("LATEST_PATH", latest), ("FEED_PATH", feed)]:
@@ -57,7 +61,7 @@ def test_feed_only_key_is_head_checked_and_blocks_catalog(monkeypatch, tmp_path)
     extra = "/reports/2026/11/intel--not-in-catalog.html"
     f = json.loads(feed.read_text())
     f.append({
-        "id": "intel--new", "report_url": extra,
+        "id": "intel--new", "report_url": extra, "tlp": "TLP:CLEAR",
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     })
     feed.write_text(json.dumps(f))
@@ -100,7 +104,7 @@ def test_in_window_feed_only_report_still_blocks_catalog(monkeypatch, tmp_path):
     items = json.loads(feed.read_text())
     fresh_key = "/reports/2026/11/intel--not-indexed-new.html"
     items.append({
-        "id": "intel--new", "report_url": fresh_key,
+        "id": "intel--new", "report_url": fresh_key, "tlp": "TLP:CLEAR",
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     })
     feed.write_text(json.dumps(items))
@@ -123,6 +127,72 @@ def test_expired_only_feed_does_not_certify_empty_current_delivery(monkeypatch, 
     feed.write_text(json.dumps(items))
     monkeypatch.setattr(gate, "_r2_object_exists", _never_write)
     monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    assert gate.main() == 2
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert any("BLOCKED_CURRENT_FEED_EVIDENCE" in v for _, v in events)
+
+
+def _now_z() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# The publisher (r2_report_publisher.main) removes TLP-withheld items with
+# apply_tlp_gate() BEFORE building candidates, so it never uploads them. The
+# gate must demand delivery only for what the publisher is obligated to
+# publish; otherwise one restricted/unlabelled in-window advisory makes the
+# gate unsatisfiable and blocks publication of the whole intelligence feed.
+@pytest.mark.parametrize("withheld", [
+    {"tlp": "TLP:RED"},
+    {"tlp": "TLP:AMBER"},
+    {},  # no label from an unapproved collector -> MISSING_LABEL -> withheld
+], ids=["restricted-red", "restricted-amber", "unlabelled"])
+def test_tlp_withheld_in_window_report_is_not_required_in_r2(monkeypatch, tmp_path, withheld):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    held_key = "/reports/2026/11/intel--tlp-withheld.html"
+    items = json.loads(feed.read_text())
+    items.append({"id": "intel--withheld", "report_url": held_key,
+                  "timestamp": _now_z(), **withheld})
+    feed.write_text(json.dumps(items))
+    checked = []
+
+    def head(key, *args):
+        checked.append(key)
+        # The publisher never uploaded the withheld report, so R2 has no object.
+        return key != held_key.lstrip("/")
+
+    monkeypatch.setattr(gate, "_r2_object_exists", head)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    assert gate.main() == 0
+    assert held_key.lstrip("/") not in checked
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert not any("BLOCKED" in v for _, v in events)
+
+
+def test_tlp_withheld_item_cannot_mask_real_current_loss(monkeypatch, tmp_path):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    items = json.loads(feed.read_text())
+    items.append({"id": "intel--withheld", "tlp": "TLP:RED", "timestamp": _now_z(),
+                  "report_url": "/reports/2026/11/intel--tlp-withheld.html"})
+    feed.write_text(json.dumps(items))
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    # A TLP:CLEAR in-window report that WAS owed (bbb) is genuinely absent.
+    monkeypatch.setattr(gate, "_r2_object_exists", lambda key, *args: not key.endswith("bbb.html"))
+    assert gate.main() == 1
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    # Exactly one owed report is missing: the withheld item is not counted.
+    assert any("BLOCKED_CURRENT_REPORTS_missing_1_unindexed_0" in v for _, v in events)
+
+
+def test_all_in_window_items_withheld_does_not_certify_delivery(monkeypatch, tmp_path):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    items = json.loads(feed.read_text())
+    for item in items:
+        item["tlp"] = "TLP:RED"
+    feed.write_text(json.dumps(items))
+    monkeypatch.setattr(gate, "_r2_object_exists", _never_write)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    # Same fail-closed answer as the publisher's BLOCKED_NO_ELIGIBLE_FEED: an
+    # empty obligation set is "delivery not proven", never "delivery proven".
     assert gate.main() == 2
     assert (idx.read_bytes(), latest.read_bytes()) == before
     assert any("BLOCKED_CURRENT_FEED_EVIDENCE" in v for _, v in events)

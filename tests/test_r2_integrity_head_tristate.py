@@ -83,8 +83,11 @@ def _catalogs(monkeypatch, tmp_path):
     # The publisher proves current-run delivery only for canonical in-window
     # records; this fixture must supply that timestamp explicitly.
     fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    # Labelled like a production item: the publisher (and so this gate) only
+    # owes delivery for TLP-publishable items.
     feed.write_text(json.dumps([{"id": "intel--0123456789abcdef",
-                                 "report_url": key, "timestamp": fresh}]))
+                                 "report_url": key, "timestamp": fresh,
+                                 "tlp": "TLP:CLEAR"}]))
     monkeypatch.setattr(gate, "INDEX_PATH", index)
     monkeypatch.setattr(gate, "LATEST_PATH", latest)
     monkeypatch.setattr(gate, "FEED_PATH", feed)
