@@ -502,7 +502,9 @@ def main() -> int:
             log.info("OK: api/reports/index.json written with %d clean entries", len(clean_entries))
             index_changed = True
         except Exception as exc:
-            log.error("Failed to write cleaned index: %s (non-fatal)", exc)
+            log.error("BLOCKED: local report index write failed (%s)", type(exc).__name__)
+            _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_LOCAL_INDEX_WRITE")
+            return 2
     else:
         log.info("Index is clean -- no stale entries detected in checked range (%d entries)",
                  len(entries_to_check))
@@ -536,7 +538,25 @@ def main() -> int:
                 log.info("OK: api/reports/latest.json purged %d stale entries", latest_purged)
                 latest_changed = True
         except Exception as exc:
-            log.warning("Could not update api/reports/latest.json: %s (non-fatal)", exc)
+            log.error("BLOCKED: local latest report catalog write failed (%s)", type(exc).__name__)
+            # An index update may have succeeded before the latest update
+            # failed. Restore *both* local files before any cloud upload;
+            # downstream stages must never see half-published catalog state.
+            rollback_ok = True
+            for original_path, original_bytes in (
+                (INDEX_PATH, original_index), (LATEST_PATH, original_latest)
+            ):
+                try:
+                    if original_bytes is not None:
+                        original_path.write_bytes(original_bytes)
+                except OSError:
+                    rollback_ok = False
+                    log.error("BLOCKED: local catalog rollback failed (%s)", original_path.name)
+            _write_github_env(
+                "R2_REPORTS_INTEGRITY_STATUS",
+                "BLOCKED_LOCAL_LATEST_WRITE" if rollback_ok else "BLOCKED_LOCAL_ROLLBACK",
+            )
+            return 2
 
     # A successful local catalog cleanup is not proof of successful remote
     # customer publication. Roll back local bytes on any upload failure.
