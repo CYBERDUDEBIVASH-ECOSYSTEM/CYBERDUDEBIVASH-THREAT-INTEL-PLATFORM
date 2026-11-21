@@ -202,6 +202,39 @@ def _get_items(data) -> list[dict]:
     return []
 
 
+def load_verified_publish_feed(path: Path) -> list[dict]:
+    """Required feed proof before *any* R2 publication or retirement.
+
+    A missing, malformed, empty or unrecognizable feed is an ingest outage,
+    not evidence that every historical report is safe to retire. Never use
+    _load_json(..., []) here: that masks a failed producer as an empty feed.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError("customer feed unreadable or invalid") from exc
+
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        items = next(
+            (payload[k] for k in ("advisories", "items", "reports")
+             if isinstance(payload.get(k), list)), None
+        )
+    else:
+        items = None
+
+    if not isinstance(items, list) or not items or any(
+        not isinstance(item, dict) for item in items
+    ):
+        raise ValueError("customer feed is empty or has an invalid item schema")
+    if not any(
+        isinstance(item.get("id"), str) and item["id"].strip() for item in items
+    ):
+        raise ValueError("customer feed has no valid intelligence identifiers")
+    return items
+
+
 def load_publish_state() -> dict:
     """Loads the incremental-publish state (synced cross-run via
     scripts/r2_state_sync.py -- see its STATE_FILES entry for this path).
@@ -730,7 +763,16 @@ def main() -> int:
 
     window_hours = report_window_hours()
     now = _utc_now()
-    items = _get_items(_load_json(FEED_JSON, []))
+    # A failed/empty producer is not a valid retirement instruction.
+    # Fail before loading/mutating publish state or performing ANY R2 operation.
+    try:
+        items = load_verified_publish_feed(FEED_JSON)
+    except ValueError as exc:
+        log.error("BLOCKED_UNTRUSTED_FEED: %s; no report PUT or DELETE permitted", exc)
+        plan = R2OperationPlan(label="r2_report_publisher", bucket=BUCKET_REPORTS)
+        emit_summary(plan, R2Budgets.from_env(), status="BLOCKED", is_report_plan=True,
+                     extra={"reason": "untrusted_or_empty_feed", "dry_run": args.dry_run})
+        return 2
     log.info("Loaded %d item(s) from %s; rolling window = %dh", len(items), FEED_JSON, window_hours)
 
     state = load_publish_state()
@@ -746,6 +788,15 @@ def main() -> int:
 
     candidates = build_publish_candidates(items, window_hours, now)
     log.info("%d item(s) within the %dh window are publish candidates.", len(candidates), window_hours)
+    if not candidates:
+        # No provably current, TLP-allowed records: the ingestion/publication
+        # pipeline is unhealthy. Never retire last-known-good R2 objects in
+        # this state; the native bucket lifecycle remains independently bounded.
+        log.error("BLOCKED_NO_ELIGIBLE_FEED: zero current publish candidates; no report PUT or DELETE permitted")
+        plan = R2OperationPlan(label="r2_report_publisher", bucket=BUCKET_REPORTS)
+        emit_summary(plan, R2Budgets.from_env(), status="BLOCKED", is_report_plan=True,
+                     extra={"reason": "no_eligible_current_intelligence", "dry_run": args.dry_run})
+        return 2
 
     budgets = R2Budgets.from_env()
     plan, put_ops, delete_ops = build_plan(
