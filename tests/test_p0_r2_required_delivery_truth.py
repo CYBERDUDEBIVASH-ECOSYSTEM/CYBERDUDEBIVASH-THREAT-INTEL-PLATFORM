@@ -165,3 +165,46 @@ def test_authenticated_catalog_readback_requires_exact_bytes(monkeypatch, tmp_pa
     remote_bytes = b'{"verified":false}'
     assert gate._remote_catalog_matches(*args) is False
     assert all("--region" in c and c[c.index("--region")+1] == "auto" for c in commands)
+
+
+def test_index_write_failure_fails_closed_before_remote_catalog_mutation(monkeypatch, tmp_path):
+    idx, latest, _, _, events, _ = _fixture(monkeypatch, tmp_path)
+    payload = json.loads(idx.read_text())
+    payload["reports"].append({"id": "old", "path": "/reports/2025/01/intel--old.html"})
+    idx.write_text(json.dumps(payload))
+    before = (idx.read_bytes(), latest.read_bytes())
+    monkeypatch.setattr(gate, "_r2_object_exists",
+                        lambda key, *args: not key.endswith("old.html"))
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+
+    def fail_replace(*args):
+        raise OSError("simulated read-only filesystem")
+
+    monkeypatch.setattr(gate.os, "replace", fail_replace)
+    assert gate.main() == 2
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert ("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_LOCAL_INDEX_WRITE") in events
+
+
+def test_latest_write_failure_restores_prior_index_change(monkeypatch, tmp_path):
+    idx, latest, _, _, events, _ = _fixture(monkeypatch, tmp_path)
+    historical = {"id": "old", "path": "/reports/2025/01/intel--old.html"}
+    for path in (idx, latest):
+        payload = json.loads(path.read_text())
+        payload["reports"].append(historical)
+        path.write_text(json.dumps(payload))
+    before = (idx.read_bytes(), latest.read_bytes())
+    monkeypatch.setattr(gate, "_r2_object_exists",
+                        lambda key, *args: not key.endswith("old.html"))
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    real_replace = gate.os.replace
+
+    def fail_latest_only(src, dest):
+        if str(dest) == str(latest):
+            raise OSError("simulated latest-catalog write failure")
+        return real_replace(src, dest)
+
+    monkeypatch.setattr(gate.os, "replace", fail_latest_only)
+    assert gate.main() == 2
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert ("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_LOCAL_LATEST_WRITE") in events
