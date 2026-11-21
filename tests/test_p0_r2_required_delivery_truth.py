@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from scripts import r2_reports_integrity as gate
@@ -18,7 +19,13 @@ def _fixture(monkeypatch, tmp_path):
     index, latest, feed = root / "reports" / "index.json", root / "reports" / "latest.json", root / "feed.json"
     index.write_text(json.dumps(payload))
     latest.write_text(json.dumps(payload))
-    feed.write_text(json.dumps([{"id": row["id"], "report_url": row["path"]} for row in reports]))
+    # These are deliberately fresh: the publisher only owes report delivery
+    # for the canonical rolling window, never every historical feed row.
+    fresh_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    feed.write_text(json.dumps([
+        {"id": row["id"], "report_url": row["path"], "timestamp": fresh_ts}
+        for row in reports
+    ]))
     for name, p in [("INDEX_PATH", index), ("LATEST_PATH", latest), ("FEED_PATH", feed)]:
         monkeypatch.setattr(gate, name, p)
     monkeypatch.setenv("CF_ACCOUNT_ID", "testaccount")
@@ -49,7 +56,10 @@ def test_feed_only_key_is_head_checked_and_blocks_catalog(monkeypatch, tmp_path)
     idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
     extra = "/reports/2026/11/intel--not-in-catalog.html"
     f = json.loads(feed.read_text())
-    f.append({"id": "intel--new", "report_url": extra})
+    f.append({
+        "id": "intel--new", "report_url": extra,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    })
     feed.write_text(json.dumps(f))
     checked = []
     monkeypatch.setattr(gate, "_s3_cp", _never_write)
@@ -61,6 +71,61 @@ def test_feed_only_key_is_head_checked_and_blocks_catalog(monkeypatch, tmp_path)
     assert extra.lstrip("/") in checked
     assert (idx.read_bytes(), latest.read_bytes()) == before
     assert any("unindexed_1" in v for _, v in events)
+
+
+def test_expired_feed_only_report_is_not_falsely_required_as_current(monkeypatch, tmp_path):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    historical = "/reports/2026/11/intel--old-feed-only.html"
+    items = json.loads(feed.read_text())
+    items.append({
+        "id": "intel--historical", "report_url": historical,
+        "timestamp": (datetime.now(timezone.utc) - timedelta(hours=72))
+                     .isoformat().replace("+00:00", "Z"),
+    })
+    feed.write_text(json.dumps(items))
+    heads = []
+    def head(key, *args):
+        heads.append(key)
+        return True
+    monkeypatch.setattr(gate, "_r2_object_exists", head)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    assert gate.main() == 0
+    assert historical.lstrip("/") not in heads
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert any(v.startswith("OK_purged=0") for _, v in events)
+
+
+def test_in_window_feed_only_report_still_blocks_catalog(monkeypatch, tmp_path):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    items = json.loads(feed.read_text())
+    fresh_key = "/reports/2026/11/intel--not-indexed-new.html"
+    items.append({
+        "id": "intel--new", "report_url": fresh_key,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    })
+    feed.write_text(json.dumps(items))
+    checked = []
+    monkeypatch.setattr(gate, "_r2_object_exists",
+                        lambda key, *args: checked.append(key) or True)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    assert gate.main() == 1
+    assert fresh_key.lstrip("/") in checked
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert any("unindexed_1" in v for _, v in events)
+
+
+def test_expired_only_feed_does_not_certify_empty_current_delivery(monkeypatch, tmp_path):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    items = json.loads(feed.read_text())
+    old = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat().replace("+00:00", "Z")
+    for item in items:
+        item["timestamp"] = old
+    feed.write_text(json.dumps(items))
+    monkeypatch.setattr(gate, "_r2_object_exists", _never_write)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    assert gate.main() == 2
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert any("BLOCKED_CURRENT_FEED_EVIDENCE" in v for _, v in events)
 
 
 @pytest.mark.parametrize("field", ["CF_ACCOUNT_ID", "CF_R2_REPORTS_KEY_ID", "CF_R2_REPORTS_SECRET_KEY"])

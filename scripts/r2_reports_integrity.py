@@ -310,20 +310,38 @@ def main() -> int:
         )
         if not isinstance(items, list) or not items or any(not isinstance(i, dict) for i in items):
             raise ValueError("invalid feed schema")
-        for item in items:
+        # Match the report publisher's EXISTING 24-hour canonical-timestamp
+        # eligibility contract.  An item lingering in api/feed.json is NOT
+        # necessarily a current-run publication obligation; historical
+        # references belong to the separately checked catalog continuity set.
+        # Reuse the publisher helper rather than guessing from report filenames
+        # or weakening the live delivery HEAD requirement.
+        # The production job runs this file as a script; pytest imports it as
+        # scripts.r2_reports_integrity. Support both entry modes without
+        # changing the publisher or its existing absolute imports.
+        scripts_dir = str(Path(__file__).resolve().parent)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from r2_report_publisher import build_publish_candidates, report_window_hours
+        window_hours = report_window_hours()
+        current_candidates = build_publish_candidates(
+            items, window_hours, datetime.now(timezone.utc)
+        )
+        for candidate in current_candidates:
+            item = candidate["item"]
             ru = item.get("report_url") or item.get("internal_report_url")
             if ru:
                 key = _path_to_r2_key(ru) if isinstance(ru, str) else None
                 if not key:
-                    raise ValueError("invalid report path in feed")
+                    raise ValueError("invalid in-window report path in feed")
                 current_run_keys.add(key)
         if not current_run_keys:
-            raise ValueError("no current report URLs")
+            raise ValueError("no in-window report URLs; delivery not proven")
     except (OSError, ValueError, TypeError):
         log.error("R2 required integrity proof unavailable: feed or report URL evidence invalid")
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_CURRENT_FEED_EVIDENCE")
         return 2
-    log.info("Current-run report URLs: %d (from api/feed.json)", len(current_run_keys))
+    log.info("Current report URLs within publisher %dh window: %d (api/feed.json)", window_hours, len(current_run_keys))
 
     # --- Load latest.json up front (needed both to build the check set below
     #     and to purge it later) so its own entries -- which are not

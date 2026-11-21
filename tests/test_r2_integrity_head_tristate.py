@@ -5,6 +5,7 @@ Network/R2 writes are replaced with deterministic subprocess mocks.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import subprocess
 from pathlib import Path
 
@@ -79,7 +80,11 @@ def _catalogs(monkeypatch, tmp_path):
                "reports": [{"id": "intel--0123456789abcdef", "path": key}]}
     index.write_text(json.dumps(payload))
     latest.write_text(json.dumps(payload))
-    feed.write_text(json.dumps([{"id": "intel--0123456789abcdef", "report_url": key}]))
+    # The publisher proves current-run delivery only for canonical in-window
+    # records; this fixture must supply that timestamp explicitly.
+    fresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    feed.write_text(json.dumps([{"id": "intel--0123456789abcdef",
+                                 "report_url": key, "timestamp": fresh}]))
     monkeypatch.setattr(gate, "INDEX_PATH", index)
     monkeypatch.setattr(gate, "LATEST_PATH", latest)
     monkeypatch.setattr(gate, "FEED_PATH", feed)

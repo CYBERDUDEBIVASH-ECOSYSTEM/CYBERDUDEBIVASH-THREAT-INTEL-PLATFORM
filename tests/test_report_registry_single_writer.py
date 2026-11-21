@@ -27,6 +27,7 @@ indefinitely.
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +35,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import generate_dashboard_feeds  # noqa: E402
 import r2_reports_integrity as integrity  # noqa: E402
+
+
+def _current_report_path(report_id: str) -> str:
+    # Use the real current UTC month; never fabricate mismatched chronology
+    # just to make a report-delivery test pass.
+    return f"/reports/{datetime.now(timezone.utc):%Y/%m}/{report_id}.html"
 
 
 def _write_json(path: Path, data) -> None:
@@ -104,21 +111,22 @@ class TestR2ReportsIntegrityPurgeConsistency:
         _write_json(integrity.INDEX_PATH, {
             "schema_version": "1.0", "total_reports": 3, "reports_listed": 3,
             "reports": [
-                {"id": "intel--a", "path": "/reports/2026/08/intel--a.html"},
-                {"id": "intel--b", "path": "/reports/2026/08/intel--b.html"},
-                {"id": "intel--c", "path": "/reports/2026/08/intel--c.html"},
+                {"id": "intel--a", "path": _current_report_path("intel--a")},
+                {"id": "intel--b", "path": _current_report_path("intel--b")},
+                {"id": "intel--c", "path": _current_report_path("intel--c")},
             ],
         })
         _write_json(integrity.LATEST_PATH, {
             "schema_version": "1.0", "total_reports": 3, "reports_listed": 2,
             "reports": [
-                {"id": "intel--a", "path": "/reports/2026/08/intel--a.html"},
-                {"id": "intel--b", "path": "/reports/2026/08/intel--b.html"},
+                {"id": "intel--a", "path": _current_report_path("intel--a")},
+                {"id": "intel--b", "path": _current_report_path("intel--b")},
             ],
         })
         _write_json(integrity.FEED_PATH, [{
             "id": "intel--a",
-            "report_url": "/reports/2026/08/intel--a.html",
+            "report_url": _current_report_path("intel--a"),
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }])
 
         # intel--b is missing from R2 (e.g. its upload silently failed).
@@ -156,15 +164,16 @@ class TestR2ReportsIntegrityPurgeConsistency:
 
         _write_json(integrity.INDEX_PATH, {
             "schema_version": "1.0", "total_reports": 1, "reports_listed": 1,
-            "reports": [{"id": "intel--a", "path": "/reports/2026/08/intel--a.html"}],
+            "reports": [{"id": "intel--a", "path": _current_report_path("intel--a")}],
         })
         _write_json(integrity.LATEST_PATH, {
             "schema_version": "1.0", "total_reports": 1, "reports_listed": 1,
-            "reports": [{"id": "intel--z", "path": "/reports/2026/08/intel--z.html"}],
+            "reports": [{"id": "intel--z", "path": _current_report_path("intel--z")}],
         })
         _write_json(integrity.FEED_PATH, [{
             "id": "intel--a",
-            "report_url": "/reports/2026/08/intel--a.html",
+            "report_url": _current_report_path("intel--a"),
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }])
 
         # Only intel--z is missing from R2; intel--a is fine.

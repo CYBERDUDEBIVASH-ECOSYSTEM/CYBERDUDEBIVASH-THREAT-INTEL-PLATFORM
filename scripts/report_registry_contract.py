@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any
 
 SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
+# Preserve the five-key aggregate stats schema for existing customers. A
+# vulnerability without corroborated CVSS is truthfully displayed UNRATED,
+# but contributes to the UNKNOWN (unrated/unknown) aggregate count.
+REPORT_SEVERITIES = frozenset((*SEVERITIES, "UNRATED"))
 
 
 def _nonnegative_int(value: Any) -> bool:
@@ -65,10 +69,10 @@ def audit_registry(index: Any, latest: Any, stats: Any) -> dict[str, Any]:
                 defects.append(f"index: reports[{position}] is not an object")
                 continue
             severity = report.get("severity")
-            if severity not in SEVERITIES:
+            if severity not in REPORT_SEVERITIES:
                 defects.append(f"index: reports[{position}] has invalid severity")
             else:
-                observed[severity] += 1
+                observed["UNKNOWN" if severity == "UNRATED" else severity] += 1
             report_id = report.get("id")
             if not isinstance(report_id, str) or not report_id.strip():
                 defects.append(f"index: reports[{position}] has invalid ID")

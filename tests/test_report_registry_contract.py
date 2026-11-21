@@ -74,6 +74,34 @@ class RegistryContractTests(unittest.TestCase):
         index["reports"][0]["severity"] = "UNVERIFIED"
         self.assertEqual(module.audit_registry(index, latest, stats)["verdict"], "BLOCKED")
 
+    def test_unrated_vulnerability_keeps_truthful_display_and_unknown_bucket(self):
+        # Report builder and dossier S1 correctly return UNRATED for a CVE
+        # without CVSS. Do not inflate CRITICAL/HIGH, or alter stats schema.
+        index, latest, stats = self.fixture()
+        index["reports"][0]["severity"] = "UNRATED"
+        stats["by_severity"]["HIGH"] = 0
+        stats["by_severity"]["UNKNOWN"] = 1
+        result = module.audit_registry(index, latest, stats)
+        self.assertEqual(result["verdict"], "ARTIFACT_CONSISTENCY_ONLY")
+        self.assertFalse(result["delivery_certified"])
+        self.assertEqual(index["reports"][0]["severity"], "UNRATED")
+        self.assertEqual(set(stats["by_severity"]), set(module.SEVERITIES))
+
+    def test_unrated_without_matching_unknown_aggregate_is_blocked(self):
+        index, latest, stats = self.fixture()
+        index["reports"][0]["severity"] = "UNRATED"
+        result = module.audit_registry(index, latest, stats)
+        self.assertEqual(result["verdict"], "BLOCKED")
+        self.assertIn("severity distribution", " ".join(result["defects"]))
+
+    def test_unrated_as_new_aggregate_bucket_is_not_accepted(self):
+        index, latest, stats = self.fixture()
+        index["reports"][0]["severity"] = "UNRATED"
+        stats["by_severity"]["HIGH"] = 0
+        stats["by_severity"]["UNKNOWN"] = 1
+        stats["by_severity"]["UNRATED"] = 1
+        self.assertEqual(module.audit_registry(index, latest, stats)["verdict"], "BLOCKED")
+
     def test_duplicate_report_id_is_rejected(self):
         index, latest, stats = self.fixture()
         index["reports"][1]["id"] = index["reports"][0]["id"]
