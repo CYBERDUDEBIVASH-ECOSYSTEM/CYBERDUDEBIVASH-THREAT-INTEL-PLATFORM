@@ -128,21 +128,54 @@ def _get_json(url: str, token: str | None = None) -> tuple[int, dict | None]:
         return 0, None
 
 
+def _verified_workflow_runs(url: str, token: str) -> list[dict]:
+    """Fail closed: an unreadable GitHub run list is NOT proof of no publisher.
+
+    Never dispatch a potential competing writer when authentication, API
+    availability, rate limits, or response schema make run state unknowable.
+    """
+    http_status, body = _get_json(url, token)
+    if http_status != 200 or not isinstance(body, dict):
+        raise ValueError("publisher run-state API unavailable")
+    runs = body.get("workflow_runs")
+    if not isinstance(runs, list) or any(
+        not isinstance(run, dict)
+        or not isinstance(run.get("id"), int)
+        or not isinstance(run.get("created_at"), str)
+        for run in runs
+    ):
+        raise ValueError("publisher run-state response invalid")
+    return runs
+
+
 def main() -> int:
     token = os.environ.get("GITHUB_TOKEN", "")
     now = datetime.now(timezone.utc)
     health_http_status, health = _get_json(HEALTH_URL)
     api = f"https://api.github.com/repos/{REPO}/actions/workflows/{WORKFLOW}/runs"
     active_by_id = {}
-    for status in ACTIVE_STATUSES:  # GitHub's status filters overlap: dedupe by run id
-        _, body = _get_json(f"{api}?status={status}&per_page=5", token)
-        for r in (body or {}).get("workflow_runs", []):
-            active_by_id[r["id"]] = r
+    guard = []
+    try:
+        for status in ACTIVE_STATUSES:  # GitHub's status filters overlap: dedupe by run id
+            for run in _verified_workflow_runs(f"{api}?status={status}&per_page=5", token):
+                active_by_id[run["id"]] = run
+        guard = [
+            run for run in _verified_workflow_runs(
+                f"{api}?event=workflow_dispatch&per_page=10", token
+            )
+            if (run.get("actor") or {}).get("login") == GUARD_ACTOR
+        ]
+        guard.sort(key=lambda run: run["created_at"], reverse=True)
+        verdict = decide(health, list(active_by_id.values()), guard, now,
+                         health_http_status=health_http_status)
+    except (ValueError, KeyError, TypeError):
+        verdict = {
+            "action": "alert",
+            "reason": "github_run_state_unavailable",
+            "age_seconds": ((health or {}).get("intelligence") or {}).get("age_seconds"),
+            "exit": 1,
+        }
     active = list(active_by_id.values())
-    _, body = _get_json(f"{api}?event=workflow_dispatch&per_page=10", token)
-    guard = [r for r in (body or {}).get("workflow_runs", []) if (r.get("actor") or {}).get("login") == GUARD_ACTOR]
-    guard.sort(key=lambda r: r["created_at"], reverse=True)
-    verdict = decide(health, active, guard, now, health_http_status=health_http_status)
     if verdict["action"] == "dispatch" and not DRY_RUN:
         req = urllib.request.Request(
             f"https://api.github.com/repos/{REPO}/actions/workflows/{WORKFLOW}/dispatches",
