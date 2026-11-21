@@ -322,10 +322,20 @@ def main() -> int:
         scripts_dir = str(Path(__file__).resolve().parent)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
-        from r2_report_publisher import build_publish_candidates, report_window_hours
+        from r2_report_publisher import (
+            apply_tlp_gate, build_publish_candidates, report_window_hours,
+        )
         window_hours = report_window_hours()
+        # The publisher withholds TLP-restricted/unlabelled items BEFORE
+        # building its candidates (r2_report_publisher.main) and, by policy
+        # (P0 #721), never uploads them. Apply the same gate here: demanding
+        # an R2 object the publisher is forbidden to create would make this
+        # gate unsatisfiable and block publication of the entire feed over one
+        # withheld advisory. Fail-closed is preserved: tlp_policy denies on any
+        # policy fault, and an empty obligation set still raises below.
+        publishable, _withheld = apply_tlp_gate(items, {})
         current_candidates = build_publish_candidates(
-            items, window_hours, datetime.now(timezone.utc)
+            publishable, window_hours, datetime.now(timezone.utc)
         )
         for candidate in current_candidates:
             item = candidate["item"]

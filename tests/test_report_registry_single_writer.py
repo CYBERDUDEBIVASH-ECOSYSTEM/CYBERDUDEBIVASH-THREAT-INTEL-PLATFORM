@@ -127,6 +127,7 @@ class TestR2ReportsIntegrityPurgeConsistency:
             "id": "intel--a",
             "report_url": _current_report_path("intel--a"),
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "tlp": "TLP:CLEAR",  # publishable, so the gate owes delivery for it
         }])
 
         # intel--b is missing from R2 (e.g. its upload silently failed).
@@ -174,6 +175,7 @@ class TestR2ReportsIntegrityPurgeConsistency:
             "id": "intel--a",
             "report_url": _current_report_path("intel--a"),
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "tlp": "TLP:CLEAR",  # publishable, so the gate owes delivery for it
         }])
 
         # Only intel--z is missing from R2; intel--a is fine.
