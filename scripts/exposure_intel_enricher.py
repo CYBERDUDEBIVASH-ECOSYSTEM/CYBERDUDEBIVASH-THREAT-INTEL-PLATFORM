@@ -95,6 +95,10 @@ MAX_LOOKUPS = int(os.environ.get("MAX_LOOKUPS", "200"))
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() == "true"
 HTTP_TIMEOUT = 12
 
+# A rate-limited source stays disabled for the rest of this publisher pass.
+# A unique sentinel is never mistaken for a successful API payload or a real 0.
+RATE_LIMITED = object()
+
 # Capability classes -- see module docstring.
 CVE_EXPOSURE = "CVE_EXPOSURE"
 INDICATOR_LOOKUP = "INDICATOR_LOOKUP"
@@ -304,17 +308,21 @@ ADAPTERS: List[Adapter] = [
 
 
 def _http_json(url: str, headers: Dict[str, str]) -> Optional[Any]:
-    """GET -> parsed JSON, or None on any transport/parse failure.
+    """GET -> parsed JSON, None on other failures, RATE_LIMITED on HTTP 429.
 
-    Never raises: an enrichment source being down, rate-limiting us, or
-    rejecting our key must degrade this run, not fail the pipeline.
+    Never raises: external failure must not abort the customer publisher.
+    Credentials in URL queries are never logged.
     """
     req = urllib.request.Request(url, headers={"Accept": "application/json", **headers})
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
-        log.warning("HTTP %s from %s", e.code, urllib.parse.urlsplit(url).netloc)
+        host = urllib.parse.urlsplit(url).netloc
+        if e.code == 429:
+            log.warning("HTTP 429 from %s -- suspend adapter for this run", host)
+            return RATE_LIMITED
+        log.warning("HTTP %s from %s", e.code, host)
     except Exception as e:  # noqa: BLE001 - deliberately total
         log.warning("request failed (%s): %s", urllib.parse.urlsplit(url).netloc, e)
     return None
@@ -367,6 +375,7 @@ def enrich_items(items: List[Dict], http=_http_json, budget: Optional[int] = Non
         "calls": 0,
         "items_enriched": 0,
         "unrecognised_shape": {},
+        "rate_limited_sources": [],
     }
     if not adapters:
         log.info("no CVE_EXPOSURE adapter has credentials configured -- no-op. "
@@ -375,6 +384,7 @@ def enrich_items(items: List[Dict], http=_http_json, budget: Optional[int] = Non
         return telemetry
 
     budget_spent = False
+    disabled_sources = set()
     for item in items:
         if budget_spent:
             break
@@ -383,6 +393,8 @@ def enrich_items(items: List[Dict], http=_http_json, budget: Optional[int] = Non
             continue
         per_source: Dict[str, Any] = {}
         for a in adapters:
+            if a.source_id in disabled_sources:
+                continue
             if telemetry["calls"] >= budget:
                 log.warning("MAX_LOOKUPS budget (%d) reached -- stopping this run; "
                             "remaining items keep their existing values", budget)
@@ -398,6 +410,10 @@ def enrich_items(items: List[Dict], http=_http_json, budget: Optional[int] = Non
             url, headers = built
             telemetry["calls"] += 1
             payload = http(url, headers)
+            if payload is RATE_LIMITED:
+                disabled_sources.add(a.source_id)
+                telemetry["rate_limited_sources"].append(a.source_id)
+                continue
             if payload is None:
                 continue
             count = a.extract(payload)
