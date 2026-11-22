@@ -73,8 +73,21 @@ def test_static_trust_bar_never_presents_unverified_standards_certifications():
 # This creates no external dependency and preserves pytest-style test functions.
 import unittest
 
+
+def test_metric_normalizer_loads_before_first_consumer():
+    """The EICC/browser can receive a fresh feed before a late script executes."""
+    tag = '<script src="/js/metric-normalize.js"></script>'
+    assert HTML.count(tag) == 1
+    normalizer = HTML.index(tag)
+    for consumer in ('(function eiccEngine(){',
+                     'src="/js/homepage-dashboard-engine.js',
+                     'src="/js/sentinel-live-feeds.js'):
+        assert normalizer < HTML.index(consumer), consumer
+
+
 class TestHomepageReleaseTruth(unittest.TestCase):
     def test_initial_status(self): test_startup_never_claims_unverified_live_or_74_feeds()
+    def test_normalizer_dependency_order(self): test_metric_normalizer_loads_before_first_consumer()
     def test_authoritative_sources(self): test_current_js_cache_bust_and_authoritative_mirror_boundary()
     def test_worker_freshness(self): test_only_gateway_freshness_can_authorize_sync_live()
     def test_cache_truth(self): test_embedded_cache_is_never_invented_live_publication()
