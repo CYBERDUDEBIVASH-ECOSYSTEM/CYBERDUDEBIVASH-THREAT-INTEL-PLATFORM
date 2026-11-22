@@ -217,6 +217,69 @@ class TestEnrichment:
         assert tel["items_enriched"] == 0
         _clear_creds()
 
+    def test_429_circuit_breaker_disables_only_that_source_for_the_run(self):
+        _clear_creds()
+        shodan = next(a for a in eie.ADAPTERS if a.source_id == "shodan")
+        netlas = next(a for a in eie.ADAPTERS if a.source_id == "netlas")
+        _set(shodan)
+        _set(netlas)
+        calls = []
+
+        def mock_api(url, headers):
+            calls.append(url)
+            return eie.RATE_LIMITED if "api.shodan.io" in url else {"count": 7}
+
+        items = [{"cve_id": f"CVE-2026-{i:04d}"} for i in range(12)]
+        try:
+            tel = eie.enrich_items(items, http=mock_api, budget=100)
+            assert sum("api.shodan.io" in url for url in calls) == 1
+            assert sum("app.netlas.io" in url for url in calls) == 12
+            assert tel["rate_limited_sources"] == ["shodan"]
+            assert tel["calls"] == 13
+            assert tel["items_enriched"] == 12
+            assert all(i["exposure_intel"] == {"netlas": 7} for i in items)
+        finally:
+            _clear_creds()
+
+    def test_real_http_429_returns_sentinel_without_leaking_key(self, monkeypatch, caplog):
+        import io
+        import urllib.error
+
+        def rejecting(_request, timeout):
+            raise urllib.error.HTTPError(
+                "https://api.shodan.io/shodan/host/count?key=TEST_SECRET",
+                429, "Too Many Requests", {}, io.BytesIO(b""),
+            )
+
+        monkeypatch.setattr(eie._HTTP_OPENER, "open", rejecting)
+        assert eie._http_json(
+            "https://api.shodan.io/shodan/host/count?key=TEST_SECRET", {}
+        ) is eie.RATE_LIMITED
+        assert "TEST_SECRET" not in caplog.text
+        assert "suspend adapter" in caplog.text
+
+    def test_unapproved_schemes_hosts_and_ports_are_rejected(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(eie._HTTP_OPENER, "open",
+                            lambda req, timeout: calls.append(req.full_url))
+        bad_urls = (
+            "file:///etc/passwd",
+            "http://api.shodan.io/shodan/host/count",
+            "https://127.0.0.1/shodan/host/count",
+            "https://api.shodan.io.evil.example/shodan/host/count",
+            "https://api.shodan.io:8443/shodan/host/count",
+            "https://user:pass@api.shodan.io/shodan/host/count",
+        )
+        for url in bad_urls:
+            assert eie._http_json(url, {}) is None
+        assert calls == [], "unapproved URL must never reach network transport"
+
+    def test_http_redirects_cannot_escape_provider_origin(self):
+        assert eie._NoRedirects().redirect_request(
+            None, None, 302, "Found", {},
+            "http://169.254.169.254/latest/meta-data/",
+        ) is None
+
     def test_unrecognised_shape_is_counted_in_telemetry(self):
         _clear_creds()
         _set(next(a for a in eie.ADAPTERS if a.source_id == "shodan"))
