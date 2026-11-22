@@ -483,7 +483,7 @@
 <!-- SENTINEL APEX CARD RENDERER &mdash; enterprise glassmorphism card system v184.0 -->
 <link rel="stylesheet" href="/css/card_renderer_styles.css">
 <link rel="stylesheet" href="/css/apex-design-tokens.css">
-<script src="/js/apex-status-model.js" defer></script>
+<script src="/js/apex-status-model.js?v=d6b4c9d1fc40" defer></script>
 </head>
 <body>
 
@@ -1054,11 +1054,11 @@
                 function render() {
                     var S = window.ApexStatus;
                     if (!S) return;
-                    health.then(function (h) { return { ok: true, h: h.data }; }, function () { return { ok: false, h: null }; }).then(function (hr) {
-                        var h = hr.h;
-                        led('acs-st-intel', S.intelligenceState(h, !hr.ok));
-                        led('acs-st-watchdog', S.watchdogState(h, !hr.ok));
-                        led('acs-st-api', S.apiState(hr.ok && !!h, !hr.ok));
+                    health.catch(function () { return null; }).then(function (hr) {
+                        var h = hr && hr.data;
+                        led('acs-st-intel', S.intelligenceState(h, !hr));
+                        led('acs-st-watchdog', S.watchdogState(h, !hr));
+                        led('acs-st-api', S.apiState(!!h, !hr, hr && hr.status, h && h.freshness_status));
                         var rel = S.releaseLabel(h);
                         led('acs-st-release', rel ? { state: 'info', label: 'Release ' + rel } : { state: 'unknown', label: 'Release unknown' });
                         put('acs-release', rel ? el('span', 'ax-mono', rel) : na());
@@ -5259,7 +5259,7 @@
         </footer>
     </div>
 
-    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script src="/js/homepage-dashboard-engine.js?v=0fa747eaf22d"></script>
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script src="/js/homepage-dashboard-engine.js?v=3881b79caac5"></script>
 
     <!-- ── v122.0.0: UPGRADE MODAL ─────────────────────────────────────────── -->
     <div id="upgrade-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.82);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);" onclick="if(event.target===this)window.closeUpgradeModal()">
