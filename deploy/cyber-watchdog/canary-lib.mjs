@@ -189,7 +189,7 @@ export async function runAutonomousCanary({
       lastRead = {
         http_status: Number.isInteger(r.status) ? r.status : 0,
         freshness: ["FRESH", "STALE", "INVALID", "EMPTY", "UNAVAILABLE"].includes(freshness) ? freshness : "UNKNOWN",
-        generation_changed: typeof observedGeneration === "string" && typeof feedGeneratedAt === "string"
+        generation_changed: typeof observedGeneration === "string" && typeof generation === "string"
           ? observedGeneration !== generation : null,
       };
       // A scheduled publisher can replace the feed after watch creation.
