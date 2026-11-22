@@ -3161,7 +3161,6 @@ def main(argv=None) -> int:
                     _severity_repair_attempts += 1
                 if _refresh_ep_ss is None and _refresh_severity is None:
                     continue
-            only_missing_candidates += 1
 
         # P0 R2 COST INCIDENT FIX: --since-hours gate applies regardless of
         # --only-missing -- without this, an item whose report R2 object was
@@ -3174,6 +3173,12 @@ def main(argv=None) -> int:
         if not _within_report_window(item, args.since_hours, _window_now):
             excluded_by_window += 1
             continue
+        # Count only eligible repair candidates. Historical items deliberately
+        # excluded by REPORT_WINDOW_HOURS are not failed repairs; counting them
+        # previously reported thousands of false CRITICAL errors each run.
+        # This changes observability only, not rendering, TLP, or R2 writes.
+        if args.only_missing:
+            only_missing_candidates += 1
 
         # ── Zero-skip policy: generate report for EVERY real entry ──
         # Short entries get an enriched template - no blanket skip
