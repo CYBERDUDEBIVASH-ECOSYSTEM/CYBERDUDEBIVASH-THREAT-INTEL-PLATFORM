@@ -317,6 +317,13 @@ jobs:
             tests/test_report_chronology_integrity.py \
             tests/test_p0_pages_report_parity_preflight.py
 
+      # P0 root cause 2026-11-22: local R2 schema-1 report index includes
+      # policy-withheld records. Historical continuity MUST select from the
+      # Worker schema-2 customer-ready catalog and still require actual 200s.
+      # Mandatory explicit step because Python CI uses a curated suite list.
+      - name: "P0 ready-only historical continuity negative controls (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_p0_customer_ready_historical_selection.py
+
       # P0 report-catalog / feed-window resolution is an offline precheck.
       # Mandatory explicit test step: Python CI uses a scoped test allowlist.
       - name: "P0 certification source coverage offline negative controls"
