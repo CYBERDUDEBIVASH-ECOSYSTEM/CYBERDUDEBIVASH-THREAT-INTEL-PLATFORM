@@ -1083,8 +1083,10 @@ def phase5_historical_report_audit(feed: List[dict], manifest: dict) -> PhaseRes
     # a 100% continuity verdict or the Phase 5 release-confidence points.
     success_rate = (effective_ok / effective_total) if effective_total else 0.0
     phase_success = (
-        unprobed == 0 and effective_total > 0 and effective_ok == effective_total
-    )  # Require at least one independently delivered historical sample.
+        unprobed == 0 and gate_rejected == 0 and effective_total > 0
+        and effective_ok == effective_total
+    )  # A ready-only catalog row becoming gated at HEAD time is drift,
+       # NOT successful publication; fail closed even if others returned 200.
 
     duration = time.monotonic() - t0
     if effective_total == 0:
