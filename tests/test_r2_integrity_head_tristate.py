@@ -88,6 +88,8 @@ def _catalogs(monkeypatch, tmp_path):
     feed.write_text(json.dumps([{"id": "intel--0123456789abcdef",
                                  "report_url": key, "timestamp": fresh,
                                  "tlp": "TLP:CLEAR"}]))
+    from tests.r2_publish_state_helper import mark_published
+    mark_published(monkeypatch, tmp_path, [("intel--0123456789abcdef", key)])
     monkeypatch.setattr(gate, "INDEX_PATH", index)
     monkeypatch.setattr(gate, "LATEST_PATH", latest)
     monkeypatch.setattr(gate, "FEED_PATH", feed)

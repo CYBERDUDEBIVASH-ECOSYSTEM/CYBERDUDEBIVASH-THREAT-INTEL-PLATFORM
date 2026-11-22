@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from scripts import r2_reports_integrity as gate
+from tests.r2_publish_state_helper import mark_published
 
 
 def _fixture(monkeypatch, tmp_path):
@@ -30,6 +31,9 @@ def _fixture(monkeypatch, tmp_path):
          "tlp": "TLP:CLEAR"}
         for row in reports
     ]))
+    # These reports were rendered and PUT by the bounded publisher, so STAGE
+    # 3.5.1 owes R2 delivery for them (see tests/r2_publish_state_helper.py).
+    mark_published(monkeypatch, tmp_path, [(r["id"], r["path"]) for r in reports])
     for name, p in [("INDEX_PATH", index), ("LATEST_PATH", latest), ("FEED_PATH", feed)]:
         monkeypatch.setattr(gate, name, p)
     monkeypatch.setenv("CF_ACCOUNT_ID", "testaccount")
@@ -65,6 +69,8 @@ def test_feed_only_key_is_head_checked_and_blocks_catalog(monkeypatch, tmp_path)
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     })
     feed.write_text(json.dumps(f))
+    # Rendered and PUT, but absent from the customer catalog: a real defect.
+    mark_published(monkeypatch, tmp_path, [("intel--new", extra)])
     checked = []
     monkeypatch.setattr(gate, "_s3_cp", _never_write)
     def head(key, *args):
@@ -108,6 +114,7 @@ def test_in_window_feed_only_report_still_blocks_catalog(monkeypatch, tmp_path):
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     })
     feed.write_text(json.dumps(items))
+    mark_published(monkeypatch, tmp_path, [("intel--new", fresh_key)])
     checked = []
     monkeypatch.setattr(gate, "_r2_object_exists",
                         lambda key, *args: checked.append(key) or True)
@@ -223,6 +230,96 @@ def test_all_in_window_items_withheld_does_not_certify_delivery(monkeypatch, tmp
     assert gate.main() == 2
     assert (idx.read_bytes(), latest.read_bytes()) == before
     assert any("BLOCKED_CURRENT_FEED_EVIDENCE" in v for _, v in events)
+
+
+# ---- late renders ----------------------------------------------------------
+# STAGE 3.5a publishes only what is rendered when it runs. Items the feed gains
+# afterwards (e.g. STAGE 3.1.13's multi-source collector) are rendered by STAGE
+# 5.4.0b and published by 5.4.0c, then policed by the end-of-run gates (5.4.1
+# existence validator, 5.8.1c convergence). STAGE 3.5.1 sits BEFORE that repair
+# and 5.4.0b/c are skipped when it fails, so demanding an R2 object for an item
+# that has not been rendered yet deadlocks publication of the whole feed.
+# Production run 44941209717: BLOCKED_CURRENT_REPORTS_missing_2_unindexed_2 --
+# two in-window TLP:CLEAR items, no HTML anywhere, no publish state.
+def _late_item(item_id="intel--late-render"):
+    path = f"/reports/2026/11/{item_id}.html"
+    return {"id": item_id, "tlp": "TLP:CLEAR", "timestamp": _now_z(),
+            "report_url": path}, path
+
+
+def test_late_render_without_a_report_is_not_required_at_3_5_1(monkeypatch, tmp_path):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    late, late_path = _late_item()
+    feed.write_text(json.dumps(json.loads(feed.read_text()) + [late]))
+    checked = []
+
+    def head(key, *args):
+        checked.append(key)
+        return key != late_path.lstrip("/")      # no object: never rendered
+
+    monkeypatch.setattr(gate, "_r2_object_exists", head)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    assert gate.main() == 0
+    assert late_path.lstrip("/") not in checked
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert not any("BLOCKED" in v for _, v in events)
+
+
+def test_report_rendered_locally_but_missing_from_r2_still_blocks(monkeypatch, tmp_path):
+    """Control: a real upload failure must not be excused as a 'late render'."""
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    item, path = _late_item("intel--rendered-not-uploaded")
+    feed.write_text(json.dumps(json.loads(feed.read_text()) + [item]))
+    html = tmp_path / "reports" / "intel--rendered-not-uploaded.html"
+    html.parent.mkdir(parents=True)
+    html.write_text("<html></html>")                 # rendered on the runner
+    pub = mark_published(monkeypatch, tmp_path, [])  # not in publish state
+    monkeypatch.setattr(pub, "rel_report_path",
+                        lambda it: html if it.get("id") == item["id"] else tmp_path / "absent.html")
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    monkeypatch.setattr(gate, "_r2_object_exists",
+                        lambda key, *args: key != path.lstrip("/"))
+    assert gate.main() == 1
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert any("BLOCKED_CURRENT_REPORTS_missing_1_unindexed_1" in v for _, v in events)
+
+
+def test_late_render_cannot_mask_a_real_published_report_loss(monkeypatch, tmp_path):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    late, _ = _late_item()
+    feed.write_text(json.dumps(json.loads(feed.read_text()) + [late]))
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    monkeypatch.setattr(gate, "_r2_object_exists",
+                        lambda key, *args: not key.endswith("bbb.html"))
+    assert gate.main() == 1
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    # Exactly one owed report is missing; the late render is not counted.
+    assert any("BLOCKED_CURRENT_REPORTS_missing_1_unindexed_0" in v for _, v in events)
+
+
+def test_only_late_renders_do_not_certify_delivery(monkeypatch, tmp_path):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    # Nothing was rendered or published: an empty obligation set proves nothing.
+    (tmp_path / "r2_report_publish_state.json").write_text(
+        json.dumps({"schema_version": "1.0", "items": {}}))
+    monkeypatch.setattr(gate, "_r2_object_exists", _never_write)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    assert gate.main() == 2
+    assert (idx.read_bytes(), latest.read_bytes()) == before
+    assert any("BLOCKED_CURRENT_FEED_EVIDENCE" in v for _, v in events)
+
+
+def test_pending_render_count_is_logged(monkeypatch, tmp_path, caplog):
+    idx, latest, feed, rows, events, before = _fixture(monkeypatch, tmp_path)
+    late, _ = _late_item()
+    feed.write_text(json.dumps(json.loads(feed.read_text()) + [late]))
+    monkeypatch.setattr(gate, "_r2_object_exists", lambda *args: True)
+    monkeypatch.setattr(gate, "_s3_cp", _never_write)
+    with caplog.at_level("INFO", logger="sentinel.r2_integrity"):
+        assert gate.main() == 0
+    line = next(r.getMessage() for r in caplog.records if "not yet rendered" in r.getMessage())
+    assert "1 in-window report(s) not yet rendered" in line
+    assert "STAGE 5.4.0b" in line and "intel--late-render" not in line
 
 
 @pytest.mark.parametrize("field", ["CF_ACCOUNT_ID", "CF_R2_REPORTS_KEY_ID", "CF_R2_REPORTS_SECRET_KEY"])

@@ -255,6 +255,34 @@ def _remote_catalog_matches(local_path: str, bucket: str, key: str,
 # Main
 # ---------------------------------------------------------------------------
 
+def _report_is_rendered(candidate: dict, state_items: dict, rel_report_path) -> bool:
+    """True when the bounded publisher (STAGE 3.5a) could have published this
+    report, i.e. it had been rendered when the publisher ran: the publisher's
+    state records an html_sha256 for the id (already PUT, possibly by an earlier
+    run), or the HTML file exists on this runner.
+
+    An in-window item that is neither is a LATE RENDER: the feed gained it after
+    the render pass (e.g. STAGE 3.1.13's multi-source collector). By design it
+    is rendered by STAGE 5.4.0b and published by STAGE 5.4.0c, then policed by
+    the end-of-run gates (5.4.1 existence validator, 5.8.1c convergence). This
+    gate runs BEFORE that repair and 5.4.0b/c are skipped when it fails, so
+    demanding an R2 object for such an item deadlocks publication of the whole
+    feed (production run 44941209717:
+    BLOCKED_CURRENT_REPORTS_missing_2_unindexed_2).
+
+    Fail-closed: any doubt keeps the obligation. A report that WAS rendered but
+    is absent from R2 is a genuine upload failure and still blocks.
+    """
+    entry = state_items.get(candidate.get("id")) if isinstance(state_items, dict) else None
+    if isinstance(entry, dict) and entry.get("html_sha256"):
+        return True
+    try:
+        path = rel_report_path(candidate["item"])
+        return bool(path.exists() and path.is_file())
+    except Exception:  # cannot prove it is unrendered -> it stays owed
+        return True
+
+
 def main() -> int:
     log.info("=" * 70)
     log.info("R2 REPORTS INDEX INTEGRITY GATE v1.0  --  STAGE 3.5.1")
@@ -324,7 +352,8 @@ def main() -> int:
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
         from r2_report_publisher import (
-            apply_tlp_gate, build_publish_candidates, report_window_hours,
+            apply_tlp_gate, build_publish_candidates, load_publish_state,
+            rel_report_path, report_window_hours,
         )
         window_hours = report_window_hours()
         # The publisher withholds TLP-restricted/unlabelled items BEFORE
@@ -344,7 +373,14 @@ def main() -> int:
             len(build_publish_candidates(items, window_hours, now_utc))
             - len(current_candidates)
         )
-        for candidate in current_candidates:
+        # Late renders (see _report_is_rendered) are owned by STAGE 5.4.0b/c.
+        publish_state_items = load_publish_state().get("items", {})
+        owed_candidates = [
+            c for c in current_candidates
+            if _report_is_rendered(c, publish_state_items, rel_report_path)
+        ]
+        pending_render = len(current_candidates) - len(owed_candidates)
+        for candidate in owed_candidates:
             item = candidate["item"]
             ru = item.get("report_url") or item.get("internal_report_url")
             if ru:
@@ -353,7 +389,7 @@ def main() -> int:
                     raise ValueError("invalid in-window report path in feed")
                 current_run_keys.add(key)
         if not current_run_keys:
-            raise ValueError("no in-window report URLs; delivery not proven")
+            raise ValueError("no rendered in-window report URLs; delivery not proven")
     except (OSError, ValueError, TypeError):
         log.error("R2 required integrity proof unavailable: feed or report URL evidence invalid")
         _write_github_env("R2_REPORTS_INTEGRITY_STATUS", "BLOCKED_CURRENT_FEED_EVIDENCE")
@@ -364,6 +400,11 @@ def main() -> int:
         "(publisher never uploads them); feed-wide withheld reason codes: %s",
         in_window_withheld,
         dict(sorted(Counter(r.get("reason_code", "UNKNOWN") for r in _withheld).items())),
+    )
+    log.info(
+        "%d in-window report(s) not yet rendered when the publisher ran (late renders): "
+        "owned by STAGE 5.4.0b/5.4.0c and verified at STAGE 5.4.1/5.8.1c; not required here.",
+        pending_render,
     )
 
     # --- Load latest.json up front (needed both to build the check set below
