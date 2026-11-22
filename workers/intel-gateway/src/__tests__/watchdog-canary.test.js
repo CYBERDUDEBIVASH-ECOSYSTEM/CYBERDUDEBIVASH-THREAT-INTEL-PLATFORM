@@ -107,6 +107,117 @@ test("autonomous timeout distinguishes unreadable event feed without false sched
   });
 });
 
+test("autonomous canary re-arms a stale criterion once after fresh-feed rollover; only scheduler event can pass", async () => {
+  const h = harness();
+  const originalGeneration = h.state.feed.generated_at;
+  const original = FEED_ITEMS[0].id;
+  const nextItems = FEED_ITEMS.slice(1);
+  let sleepCount = 0;
+  let rearmed = 0;
+  let reloads = 0;
+  const calls = [];
+  const http = async (method, endpoint, args) => {
+    calls.push({ method, endpoint });
+    const out = await bind(h)(method, endpoint, args);
+    if (method === "PATCH" && endpoint.startsWith("/api/watchdog/watches?id=")) {
+      assert.equal(out.status, 200);
+      rearmed++;
+      assert.deepEqual(args.body.criteria.cves, [], "stale CVE criterion must be cleared");
+    }
+    return out;
+  };
+  const result = await runAutonomousCanary({
+    http, key: PRO_KEY, runId: "p0-rollover",
+    feedItems: FEED_ITEMS, feedGeneratedAt: originalGeneration,
+    loadFeed: async () => {
+      reloads++;
+      return { ok: true, generated_at: h.state.feed.generated_at, items: h.state.feed.items };
+    },
+    sleep: async () => {
+      sleepCount++;
+      if (sleepCount === 1) {
+        // The production publisher swaps its canonical 24h feed BEFORE the
+        // first scheduled run; original unique CVE is no longer available.
+        h.state.feed = {
+          ...h.state.feed, generated_at: new Date().toISOString(),
+          count: nextItems.length, items: nextItems,
+        };
+      }
+      await h.cron(); // a real in-process scheduled() call, not evaluate=1
+    },
+    pollMs: 1, maxWaitMs: 8, maxTotalWaitMs: 12,
+  });
+  assert.equal(result.result, "PASS");
+  assert.equal(result.matched_item_id, nextItems[0].id);
+  assert.notEqual(result.matched_item_id, original);
+  assert.equal(rearmed, 1);
+  assert.equal(reloads, 1);
+  assert.ok(calls.filter(c => c.endpoint.includes("/api/watchdog/events")).every(c => c.endpoint.includes("evaluate=0")));
+  assert.ok(!calls.some(c => c.endpoint.includes("evaluate=1") || c.endpoint.includes("/api/watchdog/matches")));
+});
+
+
+test("rollover re-arm does not launder missing scheduler events into PASS", async () => {
+  const h = harness();
+  const originalGeneration = h.state.feed.generated_at;
+  const nextItems = FEED_ITEMS.slice(1);
+  let rearmCount = 0;
+  let loadCount = 0;
+  let sleepCount = 0;
+  const http = async (method, endpoint, args) => {
+    const out = await bind(h)(method, endpoint, args);
+    if (method === "PATCH" && endpoint.startsWith("/api/watchdog/watches?id=")) rearmCount++;
+    return out;
+  };
+  await assert.rejects(
+    () => runAutonomousCanary({
+      http, key: PRO_KEY, runId: "p0-rollover-no-cron",
+      feedItems: FEED_ITEMS, feedGeneratedAt: originalGeneration,
+      loadFeed: async () => {
+        loadCount++;
+        return { ok: true, generated_at: h.state.feed.generated_at, items: h.state.feed.items };
+      },
+      sleep: async () => {
+        sleepCount++;
+        if (sleepCount === 1) h.state.feed = { ...h.state.feed, generated_at: new Date().toISOString(), count: nextItems.length, items: nextItems };
+        // Deliberately NO scheduler run: a re-armed watch cannot pass itself.
+      },
+      pollMs: 1, maxWaitMs: 2, maxTotalWaitMs: 5,
+    }),
+    (err) => err.step === "wait" && /no scheduler event/.test(err.message),
+  );
+  assert.equal(rearmCount, 1);
+  assert.equal(loadCount, 1);
+});
+
+
+test("unchanged matching criterion after generation rollover never causes extra write", async () => {
+  const h = harness();
+  const originalGeneration = h.state.feed.generated_at;
+  let rearmed = 0;
+  let loaded = 0;
+  let ticks = 0;
+  const http = async (method, endpoint, args) => {
+    if (method === "PATCH" && endpoint.startsWith("/api/watchdog/watches")) rearmed++;
+    return bind(h)(method, endpoint, args);
+  };
+  const result = await runAutonomousCanary({
+    http, key: PRO_KEY, runId: "p0-rollover-no-change",
+    feedItems: FEED_ITEMS, feedGeneratedAt: originalGeneration,
+    loadFeed: async () => { loaded++; return { ok: true, generated_at: h.state.feed.generated_at, items: h.state.feed.items }; },
+    sleep: async () => {
+      ticks++;
+      if (ticks === 1) h.state.feed = { ...h.state.feed, generated_at: new Date().toISOString() };
+      if (ticks === 2) await h.cron();
+    },
+    pollMs: 1, maxWaitMs: 8, maxTotalWaitMs: 12,
+  });
+  assert.equal(result.result, "PASS");
+  assert.equal(rearmed, 0);
+  assert.equal(loaded, 1);
+});
+
+
 test("ENTERPRISE canary passes against an owner-controlled sink", async () => {
   const h = harness();
   h.net.dns.set("sink.owner.example", [{ type: 1, data: "93.184.216.34" }]);
