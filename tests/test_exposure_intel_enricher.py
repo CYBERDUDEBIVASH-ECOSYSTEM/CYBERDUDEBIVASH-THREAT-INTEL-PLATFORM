@@ -241,10 +241,9 @@ class TestEnrichment:
         finally:
             _clear_creds()
 
-    def test_real_http_429_returns_sentinel_without_leaking_key(self, monkeypatch):
+    def test_real_http_429_returns_sentinel_without_leaking_key(self, monkeypatch, caplog):
         import io
         import urllib.error
-        from unittest.mock import Mock
 
         def rejecting(_request, timeout):
             raise urllib.error.HTTPError(
@@ -252,10 +251,34 @@ class TestEnrichment:
                 429, "Too Many Requests", {}, io.BytesIO(b""),
             )
 
-        monkeypatch.setattr(eie.urllib.request, "urlopen", rejecting)
+        monkeypatch.setattr(eie._HTTP_OPENER, "open", rejecting)
         assert eie._http_json(
             "https://api.shodan.io/shodan/host/count?key=TEST_SECRET", {}
         ) is eie.RATE_LIMITED
+        assert "TEST_SECRET" not in caplog.text
+        assert "suspend adapter" in caplog.text
+
+    def test_unapproved_schemes_hosts_and_ports_are_rejected(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(eie._HTTP_OPENER, "open",
+                            lambda req, timeout: calls.append(req.full_url))
+        bad_urls = (
+            "file:///etc/passwd",
+            "http://api.shodan.io/shodan/host/count",
+            "https://127.0.0.1/shodan/host/count",
+            "https://api.shodan.io.evil.example/shodan/host/count",
+            "https://api.shodan.io:8443/shodan/host/count",
+            "https://user:pass@api.shodan.io/shodan/host/count",
+        )
+        for url in bad_urls:
+            assert eie._http_json(url, {}) is None
+        assert calls == [], "unapproved URL must never reach network transport"
+
+    def test_http_redirects_cannot_escape_provider_origin(self):
+        assert eie._NoRedirects().redirect_request(
+            None, None, 302, "Found", {},
+            "http://169.254.169.254/latest/meta-data/",
+        ) is None
 
     def test_unrecognised_shape_is_counted_in_telemetry(self):
         _clear_creds()
