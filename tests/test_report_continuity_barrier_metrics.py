@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -34,12 +35,14 @@ _BASE_ITEM = {
 }
 
 
-def _run_only_missing(manifest_path: Path) -> subprocess.CompletedProcess:
+def _run_only_missing(manifest_path: Path, since_hours: int | None = None) -> subprocess.CompletedProcess:
+    argv = [sys.executable, str(SCRIPT), "--manifest", str(manifest_path),
+            "--public-prefix", "https://intel.cyberdudebivash.com",
+            "--only-missing", "--limit", "0"]
+    if since_hours is not None:
+        argv.extend(["--since-hours", str(since_hours)])
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "--manifest", str(manifest_path),
-         "--public-prefix", "https://intel.cyberdudebivash.com",
-         "--only-missing", "--limit", "0"],
-        cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
+        argv, cwd=REPO_ROOT, capture_output=True, text=True, timeout=60,
     )
 
 
@@ -130,6 +133,47 @@ class TestBarrierMetricsObservability(unittest.TestCase):
                 self.assertIn(report["status"], ("HEALTHY", "DEGRADED", "CRITICAL"))
             finally:
                 _cleanup_reports(item_id)
+
+    def test_window_excluded_history_does_not_become_false_critical_failure(self):
+        """One eligible repair and one historical skip must be DEGRADED, not CRITICAL."""
+        fresh_id = "intel--barriermetrics0c04"
+        old_id = "intel--barriermetrics0c05"
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        fresh = dict(_BASE_ITEM, id=fresh_id, timestamp=now, processed_at=now, report_url="")
+        historical = dict(_BASE_ITEM, id=old_id, report_url="")
+        with tempfile.TemporaryDirectory() as td:
+            manifest = Path(td) / "feed_manifest.json"
+            manifest.write_text(json.dumps({"advisories": [historical, fresh]}), encoding="utf-8")
+            try:
+                result = _run_only_missing(manifest, since_hours=24)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                report = _read_barrier_report_or_skip(self)
+                self.assertEqual(report["repair_candidates"], 1)
+                self.assertEqual(report["repaired"], 1)
+                self.assertEqual(report["failed"], 0)
+                self.assertEqual(report["status"], "DEGRADED")
+                self.assertFalse(any((REPO_ROOT / "reports").rglob(f"{old_id}.html")))
+            finally:
+                _cleanup_reports(fresh_id, old_id)
+
+    def test_all_historical_window_exclusions_are_healthy_noop(self):
+        """A 24h quiet window must not manufacture failed repairs or re-render history."""
+        old_id = "intel--barriermetrics0c06"
+        historical = dict(_BASE_ITEM, id=old_id, report_url="")
+        with tempfile.TemporaryDirectory() as td:
+            manifest = Path(td) / "feed_manifest.json"
+            manifest.write_text(json.dumps({"advisories": [historical]}), encoding="utf-8")
+            try:
+                result = _run_only_missing(manifest, since_hours=24)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                report = _read_barrier_report_or_skip(self)
+                self.assertEqual(report["repair_candidates"], 0)
+                self.assertEqual(report["repaired"], 0)
+                self.assertEqual(report["failed"], 0)
+                self.assertEqual(report["status"], "HEALTHY")
+                self.assertFalse(any((REPO_ROOT / "reports").rglob(f"{old_id}.html")))
+            finally:
+                _cleanup_reports(old_id)
 
 
 if __name__ == "__main__":
