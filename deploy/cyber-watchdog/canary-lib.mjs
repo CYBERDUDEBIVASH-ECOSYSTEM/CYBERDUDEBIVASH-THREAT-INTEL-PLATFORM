@@ -142,10 +142,14 @@ export async function runProCanary({ http, key, runId, log = () => {}, feedItems
  * Autonomous proof: create a watch and wait for an event created by the
  * scheduler (origin "scheduler") while observing read-only (evaluate=0).
  */
-export async function runAutonomousCanary({ http, key, runId, feedItems, feedGeneratedAt = null, sleep, maxWaitMs = 20 * 60000, pollMs = 60000, log = () => {} }) {
+export async function runAutonomousCanary({
+  http, key, runId, feedItems, feedGeneratedAt = null, loadFeed = null,
+  sleep, maxWaitMs = 20 * 60000, maxTotalWaitMs = 28 * 60000,
+  pollMs = 60000, log = () => {},
+}) {
   const s = await session(http, key);
   const auth = { bearer: s.token };
-  const pick = pickUnambiguousCriterion(feedItems);
+  let pick = pickUnambiguousCriterion(feedItems);
   check("select_real_item", pick, "NO_UNAMBIGUOUS_FEED_ITEM");
   const created = await http("POST", "/api/watchdog/watches", { ...auth, body: { name: "CANARY-AUTO-" + runId, criteria: pick.criteria } });
   check("create_watch", created.status === 201, "status " + created.status);
@@ -154,6 +158,10 @@ export async function runAutonomousCanary({ http, key, runId, feedItems, feedGen
   const ev = { mode: "AUTONOMOUS", run_id: runId, watch_id: watchId, matched_item_id: pick.item_id };
   try {
     let waited = 0;
+    let totalWaited = 0;
+    let generation = feedGeneratedAt;
+    let rolloverInspected = false;
+    let rearmed = false;
     let lastRead = null;
     for (;;) {
       const r = await http("GET", "/api/watchdog/events?evaluate=0&limit=50", auth2);
@@ -182,17 +190,56 @@ export async function runAutonomousCanary({ http, key, runId, feedItems, feedGen
         http_status: Number.isInteger(r.status) ? r.status : 0,
         freshness: ["FRESH", "STALE", "INVALID", "EMPTY", "UNAVAILABLE"].includes(freshness) ? freshness : "UNKNOWN",
         generation_changed: typeof observedGeneration === "string" && typeof feedGeneratedAt === "string"
-          ? observedGeneration !== feedGeneratedAt : null,
+          ? observedGeneration !== generation : null,
       };
-      if (waited >= maxWaitMs) {
+      // A scheduled publisher can replace the feed after watch creation.
+      // If the original criterion is no longer matched by the NEW, FRESH
+      // authoritative generation, it is impossible for the next cron to
+      // produce the originally expected event. Re-arm the SAME temporary
+      // watch at most once, requiring another actual scheduler-origin event.
+      // Never invoke evaluate=1, synthesize events or touch customer watches.
+      if (!rolloverInspected && typeof loadFeed === "function"
+          && lastRead.http_status === 200 && lastRead.freshness === "FRESH"
+          && lastRead.generation_changed === true) {
+        rolloverInspected = true; // Hard cap: one additional feed GET per job.
+        const fresh = await loadFeed();
+        if (fresh?.ok && Array.isArray(fresh.items) && fresh.generated_at === observedGeneration) {
+          const matches = fresh.items.filter((item) =>
+            matchWatch({ id: "w_probe", enabled: true, logic: "OR", criteria: pick.criteria }, item).matched);
+          if (!(matches.length === 1 && matches[0].id === pick.item_id)) {
+            const replacement = pickUnambiguousCriterion(fresh.items);
+            check("rearm_after_rollover", replacement, "NO_UNAMBIGUOUS_FRESH_FEED_CRITERION");
+            // v1 PATCH merges criteria. Explicit empty arrays clear prior
+            // cves/keywords so the new watch is not an OR of stale + fresh.
+            const changed = await http("PATCH", "/api/watchdog/watches?id=" + encodeURIComponent(watchId), {
+              ...auth2,
+              body: { logic: "OR", criteria: {
+                cves: replacement.criteria.cves || [],
+                keywords: replacement.criteria.keywords || [],
+              } },
+            });
+            check("rearm_after_rollover", changed.status === 200 && changed.body?.watch, "WATCH_REARM_DENIED");
+            pick = replacement;
+            generation = fresh.generated_at;
+            rearmed = true;
+            waited = 0;
+            log("autonomous_rearmed", { rollover: true, rearm_count: 1 });
+          } else {
+            generation = fresh.generated_at;
+          }
+        }
+      }
+      if (waited >= maxWaitMs || totalWaited >= maxTotalWaitMs) {
         const diag = "http=" + lastRead.http_status
           + " freshness=" + lastRead.freshness
           + " feed_generation_changed=" + (lastRead.generation_changed === null ? "UNKNOWN" : String(lastRead.generation_changed));
-        log("autonomous_timeout", { waited_ms: waited, ...lastRead });
+        log("autonomous_timeout", { waited_ms: waited, total_waited_ms: totalWaited,
+          rearmed_after_rollover: rearmed, ...lastRead });
         throw new CanaryFailure("wait", "no scheduler event within " + maxWaitMs + "ms; " + diag);
       }
       await sleep(pollMs);
       waited += pollMs;
+      totalWaited += pollMs;
     }
   } finally {
     await http("DELETE", "/api/watchdog/watches?id=" + watchId, auth2).catch(() => {});
