@@ -126,7 +126,7 @@ def audit_catalog(
     # Present latest newest-first. History excludes EVERY latest entry.
     latest = [BASE + path for _, path in reversed(ordered[-latest_limit:])]
     older = ordered[:-latest_limit]
-    if historical_strategy == "spread" and len(older) > history_limit:
+    if historical_strategy == "spread" and history_limit > 1 and len(older) > history_limit:
         # P0: sample the historical cohort ACROSS canonical UTC chronology,
         # retaining the absolute oldest entry and the newest pre-latest entry.
         # Choosing only the first five caused a real 2026-11-22 convergence
