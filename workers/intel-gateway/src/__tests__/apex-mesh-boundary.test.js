@@ -96,7 +96,9 @@ function jwtFor(payload, secret) {
 
 test('billing refund deny marker invalidates an already-issued mesh JWT immediately', async () => {
   const secret = 'j'.repeat(64);
-  const token = jwtFor({ sub: 'cust-refunded', tier: 'PRO', exp: Math.floor(Date.now() / 1000) + 3600 }, secret);
+  const now = Math.floor(Date.now() / 1000);
+  const token = jwtFor({ iss: 'SENTINEL-APEX', sub: 'cust-refunded', tier: 'PRO',
+    iat: now - 30, exp: now + 3600 }, secret);
   const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Request-ID': 'jwt-refund-deny' },
@@ -108,6 +110,167 @@ test('billing refund deny marker invalidates an already-issued mesh JWT immediat
     API_KEYS_KV: { async get(key) { return key === 'jwt_deny:cust-refunded' ? '{"reason":"refunded"}' : null; } },
   };
   await assert.rejects(() => __test.resolveMeshPrincipal(req, env), (err) => err?.code === 'mesh_subscription_denied' && err?.status === 403);
+});
+
+
+test('Mesh accepts canonical unexpired audience-free login JWTs', async () => {
+  const secret = 'j'.repeat(64);
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { iss: 'SENTINEL-APEX', sub: 'cust-real', tier: 'PRO',
+    iat: now - 60, exp: now + 3600 };
+  const token = jwtFor(payload, secret);
+  assert.deepEqual(await __test.verifyJwtHs256(token, secret), payload);
+  const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ioc_value: '8.8.8.8' }),
+  });
+  const env = {
+    CDB_JWT_SECRET: secret,
+    SECURITY_HUB_KV: { async get() { return null; } },
+    API_KEYS_KV: { async get() { return null; } },
+  };
+  assert.deepEqual(await __test.resolveMeshPrincipal(req, env),
+    { sub: 'cust-real', tier: 'PRO', source: 'jwt' });
+});
+
+test('Mesh rejects non-general-audience, unbounded and malformed JWTs before admission', async () => {
+  const secret = 'j'.repeat(64);
+  const now = Math.floor(Date.now() / 1000);
+  const base = { iss: 'SENTINEL-APEX', sub: 'cust-real', tier: 'PRO',
+    iat: now - 60, exp: now + 3600 };
+  const invalid = [
+    { ...base, aud: 'cdb-watchdog' },
+    { ...base, aud: ['some-other-app'] },
+    { ...base, iss: 'cdb-apex-mesh' },
+    { ...base, iss: 'evil' },
+    { ...base, iss: undefined },
+    { ...base, exp: undefined },
+    { ...base, exp: now - 1 },
+    { ...base, exp: now },
+    { ...base, exp: String(now + 3600) },
+    { ...base, iat: undefined },
+    { ...base, iat: now + 120 },
+    { ...base, exp: now + 86402 },
+  ];
+  for (const payload of invalid) {
+    const token = jwtFor(payload, secret);
+    assert.equal(await __test.verifyJwtHs256(token, secret), null, JSON.stringify(payload));
+  }
+  assert.equal(await __test.verifyJwtHs256('x'.repeat(8193), secret), null);
+  const token = jwtFor({ ...base, aud: 'cdb-watchdog' }, secret);
+  let reads = 0;
+  const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ioc_value: '8.8.8.8' }),
+  });
+  const env = {
+    CDB_JWT_SECRET: secret,
+    SECURITY_HUB_KV: { async get() { reads++; return null; } },
+    API_KEYS_KV: { async get() { reads++; return null; } },
+  };
+  const result = await beginApexMeshBoundary(req, env);
+  assert.equal(result.blockedResponse.status, 401);
+  assert.equal(reads, 0, 'invalid token must not spend a remote key-value read');
+});
+
+test('Mesh JWT fails closed when revocation or billing authority is unavailable', async () => {
+  const secret = 'j'.repeat(64);
+  const now = Math.floor(Date.now() / 1000);
+  const token = jwtFor({ iss: 'SENTINEL-APEX', sub: 'cust-real', tier: 'PRO',
+    iat: now - 30, exp: now + 3600 }, secret);
+  const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ioc_value: '8.8.8.8' }),
+  });
+  for (const env of [
+    { CDB_JWT_SECRET: secret, API_KEYS_KV: { async get() { return null; } } },
+    { CDB_JWT_SECRET: secret, SECURITY_HUB_KV: { async get() { return null; } } },
+  ]) {
+    await assert.rejects(() => __test.resolveMeshPrincipal(req, env),
+      err => err?.code === 'mesh_auth_service_unavailable' && err?.status === 503);
+  }
+});
+
+function strongAuthAuthority(status = 'active', unavailable = false) {
+  let reads = 0;
+  const binding = {
+    idFromName(name) { return name; },
+    get() {
+      return {
+        async fetch() {
+          reads++;
+          if (unavailable) throw new Error('strong authority unavailable');
+          return Response.json({ ok: true, state: { status } });
+        },
+      };
+    },
+  };
+  return { binding, get reads() { return reads; } };
+}
+
+test('strongly suspended customer JWT is rejected before private Mesh compute', async () => {
+  const secret = 'j'.repeat(64);
+  const now = Math.floor(Date.now() / 1000);
+  const token = jwtFor({ iss: 'SENTINEL-APEX', sub: 'cust-suspended',
+    tier: 'PRO', iat: now - 30, exp: now + 3600 }, secret);
+  const authority = strongAuthAuthority('suspended');
+  const fixture = envFor();
+  fixture.env.CDB_JWT_SECRET = secret;
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'true';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = authority.binding;
+  const req = new Request('https://intel.cyberdudebivash.com/api/intel/correlate', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ioc_value: '8.8.8.8' }),
+  });
+  const result = await beginApexMeshBoundary(req, fixture.env);
+  assert.equal(result.blockedResponse.status, 403);
+  assert.equal((await result.blockedResponse.json()).error, 'mesh_subscription_denied');
+  assert.equal(authority.reads, 1);
+  assert.equal(fixture.calls.length, 0);
+});
+
+test('strongly revoked API key is rejected before Mesh admission', async () => {
+  const fixture = envFor();
+  const authority = strongAuthAuthority('revoked');
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'true';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = authority.binding;
+  const result = await beginApexMeshBoundary(request('strong-deny'), fixture.env);
+  assert.equal(result.blockedResponse.status, 403);
+  assert.equal((await result.blockedResponse.json()).error, 'mesh_subscription_denied');
+  assert.equal(authority.reads, 2);
+  assert.equal(fixture.calls.length, 0);
+});
+
+test('strongly reactivated customer overrides eventually-consistent stale KV status', async () => {
+  const fixture = envFor({ tier: 'PRO', customer_id: 'cust-1',
+    subscription_status: 'suspended' });
+  const authority = strongAuthAuthority('active');
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'true';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = authority.binding;
+  const result = await beginApexMeshBoundary(request('strong-reactivated'), fixture.env);
+  assert.ok(result.session, 'strong customer authority must override stale KV status');
+  assert.equal(authority.reads, 2);
+  assert.equal(fixture.calls.length, 1);
+});
+
+test('strong authority outage rejects admission rather than falling back to KV', async () => {
+  const fixture = envFor();
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'true';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = strongAuthAuthority('active', true).binding;
+  const result = await beginApexMeshBoundary(request('strong-unavailable'), fixture.env);
+  assert.equal(result.blockedResponse.status, 503);
+  assert.equal((await result.blockedResponse.json()).error, 'mesh_auth_service_unavailable');
+  assert.equal(fixture.calls.length, 0);
+});
+
+test('strong authority remains zero-spend on default disabled flag', async () => {
+  const fixture = envFor();
+  const authority = strongAuthAuthority('suspended');
+  fixture.env.AUTH_STRONG_CONSISTENCY_ENABLED = 'false';
+  fixture.env.GUMROAD_PROVISIONING_LOCK = authority.binding;
+  const result = await beginApexMeshBoundary(request('strong-off'), fixture.env);
+  assert.ok(result.session);
+  assert.equal(authority.reads, 0, 'disabled control must not make a paid Durable Object request');
 });
 
 test('FREE credentials are rejected before a mesh reservation', async () => {
@@ -181,6 +344,48 @@ test('completion must bind to the admitted execution', async () => {
   const result = await completeApexMeshBoundary(begin.session, Response.json({ status: 'ok' }), fixture.env);
   assert.equal(result.status, 503);
   assert.equal((await result.json()).error, 'agent_mesh_unavailable');
+});
+
+test('an admission missing a bounded execution identifier cannot reserve a Mesh mission', async () => {
+  for (const badId of ['', 'x'.repeat(129), 'bad id', 'bad\\nidentifier']) {
+    const fixture = envFor(undefined, (kind, payload) =>
+      kind === 'admit' ? { ...payload, execution_id: badId } : payload);
+    const begin = await beginApexMeshBoundary(request('admit-bad-id'), fixture.env);
+    assert.equal(begin.blockedResponse.status, 503, JSON.stringify(badId));
+    assert.equal((await begin.blockedResponse.json()).error, 'agent_mesh_unavailable');
+    assert.equal(fixture.calls.length, 1, 'must not proceed to complete a rejected admission');
+  }
+});
+
+test('Mesh completion acknowledgment cannot contradict a successful customer outcome', async () => {
+  const fixture = envFor(undefined, (kind, payload) =>
+    kind === 'complete' ? { ...payload, state: 'rejected' } : payload);
+  const begin = await beginApexMeshBoundary(request('completion-denied'), fixture.env);
+  const original = Response.json({ status: 'ok', verdict: 'malicious' }, { status: 200 });
+  const result = await completeApexMeshBoundary(begin.session, original, fixture.env);
+  assert.equal(result.status, 503);
+  assert.equal(result.headers.get('X-CDB-Mesh-Certified'), null);
+  assert.equal((await result.json()).error, 'agent_mesh_unavailable');
+  assert.equal(fixture.calls[1].body.outcome, 'succeeded');
+});
+
+test('Mesh must certify a failed response only when its own completion agrees', async () => {
+  const mismatch = envFor(undefined, (kind, payload) =>
+    kind === 'complete' ? { ...payload, state: 'succeeded' } : payload);
+  const beginMismatch = await beginApexMeshBoundary(request('failure-mismatch'), mismatch.env);
+  const failed = Response.json({ error: 'not_authorized' }, { status: 403 });
+  const rejected = await completeApexMeshBoundary(beginMismatch.session, failed, mismatch.env);
+  assert.equal(rejected.status, 503);
+  assert.equal(rejected.headers.get('X-CDB-Mesh-Certified'), null);
+  assert.equal(mismatch.calls[1].body.outcome, 'failed');
+
+  const accepted = envFor();
+  const beginAccepted = await beginApexMeshBoundary(request('failure-matched'), accepted.env);
+  const certified = await completeApexMeshBoundary(beginAccepted.session,
+    Response.json({ error: 'not_authorized' }, { status: 403 }), accepted.env);
+  assert.equal(certified.status, 403);
+  assert.equal(certified.headers.get('X-CDB-Mesh-Certified'), 'true');
+  assert.equal(accepted.calls[1].body.outcome, 'failed');
 });
 
 test('service token identifies only sentinel-apex with mesh.invoke scope', async () => {
