@@ -254,7 +254,10 @@ def test_all_gate_rejected_reports_do_not_certify_historical_delivery(
     assert "HISTORICAL READY-ONLY EVIDENCE MISSING" in phase5.message
     assert phase5.probes == []
     assert dcv._REQUESTS_USED <= dcv.MAX_TOTAL_REQUESTS
-    assert len(publication_reads) == 20
+    # Only 15 latest candidates are publication-status checked by phases 2-4.
+    # Phase 5 rejects the empty ready-only cohort without 5 extra status GETs.
+    assert len(publication_reads) == dcv.MAX_REPORT_PROBES
+    assert len(set(publication_reads)) == dcv.MAX_REPORT_PROBES
 
 
 
