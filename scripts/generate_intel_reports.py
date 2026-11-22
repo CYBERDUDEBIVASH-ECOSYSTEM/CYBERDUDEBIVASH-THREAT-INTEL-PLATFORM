@@ -2885,16 +2885,24 @@ def _local_dossier_epss_matches(path: Path, expected_percent: float) -> bool:
 # CVSS arrived (NVD/OSV enrichment lands after the orchestrator's render pass)
 # keeps its pre-enrichment label ("UNRATED") while the catalog later advertises
 # the CVSS band, and --only-missing never revisits an existing file. Observed:
-# sentinel-apex run #239, intel--1017421c...: catalog CRITICAL (CVSS 9.1), live
-# dossier UNRATED -> customer_report_fetchback_probe.mjs
-# REPORT_SEVERITY_METADATA_DIVERGENCE (HARD FAIL) -> STAGE 5.9.2 skipped.
+# sentinel-apex run #239 (intel--1017421c...: catalog CRITICAL / CVSS 9.1, live
+# dossier UNRATED) and run #240, where 10 of 21 customer-ready dossiers -- every
+# item first ingested in that run -- showed UNRATED against catalog HIGH/MEDIUM.
+# customer_report_fetchback_probe.mjs fails with REPORT_SEVERITY_METADATA_DIVERGENCE
+# (HARD FAIL) -> STAGE 5.9.2 skipped. Left alone, items only self-heal on the NEXT
+# run's orchestrator render (~4h later), so every run's newest items diverge.
 #
 # Same safety envelope as the EPSS repair: opt-in (--refresh-verified-epss),
-# only in-window items, only an already-existing canonical dossier, a small
-# per-run cap, and the re-render must reproduce the expected label or the
-# original bytes are kept (fail closed; the fetch-back stays red). It can never
-# change a TLP decision, publish anything itself, or raise the publish budget.
-P0_MAX_VERIFIED_SEVERITY_REPAIRS = 5
+# only in-window items, only an already-existing canonical dossier, a per-run
+# cap, and the re-render must reproduce the expected label or the original
+# bytes are kept (fail closed; the fetch-back stays red). It can never change a
+# TLP decision, publish anything itself, or raise the publish budget. Unlike the
+# EPSS cap (3, sized to the probe sample), this one must cover a whole run's
+# freshly ingested cohort -- the probe samples the NEWEST reports, which are
+# exactly the ones rendered pre-enrichment. Each item is repaired at most once
+# (afterwards its dossier matches), so the cost is one render + one changed-bytes
+# publish per newly ingested item, never a recurring re-upload.
+P0_MAX_VERIFIED_SEVERITY_REPAIRS = 50
 _VERIFIED_SEVERITY_LABELS = frozenset(
     {"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNRATED", "UNKNOWN"})
 # Must stay in lockstep with reportSeverityMatchesCatalog() in
@@ -2993,7 +3001,7 @@ def main(argv=None) -> int:
     parser.add_argument("--refresh-verified-epss", action="store_true",
                         help="Only with --only-missing and --since-hours: refresh at most "
                              "three in-window existing dossiers whose HTML EPSS conflicts "
-                             "with the verified current feed, and at most five whose S1 "
+                             "with the verified current feed, and at most fifty whose S1 "
                              "severity label conflicts with the catalog's (same "
                              "dossier_integrity.severity_basis authority); uses the normal "
                              "quota-guarded report publisher, never this script's deprecated "

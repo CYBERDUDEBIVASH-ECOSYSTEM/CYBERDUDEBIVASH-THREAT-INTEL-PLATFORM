@@ -102,7 +102,6 @@ def test_local_matcher_handles_missing_and_oversize_files(tmp_path):
     assert gir._local_dossier_severity_matches(p, "CRITICAL") is True
     p.write_text("x" * (gir._P0_EPSS_REPORT_MAX_BYTES + 1), encoding="utf-8")
     assert gir._local_dossier_severity_matches(p, "CRITICAL") is False
-    assert gir.P0_MAX_VERIFIED_SEVERITY_REPAIRS == 5
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
@@ -270,8 +269,10 @@ def test_items_outside_the_window_are_left_alone(world):
     assert path.read_bytes() == before
 
 
-def test_per_run_cap_bounds_the_number_of_re_renders(world):
-    count = gir.P0_MAX_VERIFIED_SEVERITY_REPAIRS + 3
+def test_per_run_cap_bounds_the_number_of_re_renders(world, monkeypatch):
+    cap = 3
+    monkeypatch.setattr(gir, "P0_MAX_VERIFIED_SEVERITY_REPAIRS", cap)
+    count = cap + 3
     stale = [_item(n) for n in range(1, count + 1)]
     final = [_item(n, cvss=9.1) for n in range(1, count + 1)]
     world.seed(final, final, stale)
@@ -279,9 +280,33 @@ def test_per_run_cap_bounds_the_number_of_re_renders(world):
     world.run("--refresh-verified-epss")
 
     fixed = sum(gir._local_dossier_severity_matches(world.dossier(i), "CRITICAL") for i in final)
-    assert fixed == gir.P0_MAX_VERIFIED_SEVERITY_REPAIRS
+    assert fixed == cap
     left = sum(gir._local_dossier_severity_matches(world.dossier(i), "UNRATED") for i in final)
-    assert left == count - gir.P0_MAX_VERIFIED_SEVERITY_REPAIRS
+    assert left == count - cap
+
+
+def test_shipped_cap_covers_a_whole_runs_freshly_ingested_cohort(world):
+    """Run #240: 10 of 21 customer-ready dossiers (every item first ingested that run) were
+    UNRATED against catalog HIGH/MEDIUM. The probe samples the NEWEST reports, so a cap smaller
+    than the cohort would leave it red. The shipped cap must repair the whole cohort at once."""
+    cohort = 10
+    assert gir.P0_MAX_VERIFIED_SEVERITY_REPAIRS >= cohort
+    stale = [_item(n) for n in range(1, cohort + 1)]
+    final = [_item(n, cvss=score) for n, score in
+             zip(range(1, cohort + 1), (6.5, 7.1, 6.5, 7.1, 7.1, 7.1, 8.5, 6.8, 7.1, 7.1))]
+    world.seed(final, final, stale)
+    assert all(gir._local_dossier_severity_matches(world.dossier(i), "UNRATED") for i in final)
+
+    world.run("--refresh-verified-epss")
+
+    expected = ["MEDIUM", "HIGH", "MEDIUM", "HIGH", "HIGH", "HIGH", "HIGH", "MEDIUM", "HIGH", "HIGH"]
+    for item, label in zip(final, expected):
+        assert gir._local_dossier_severity_matches(world.dossier(item), label), item["id"]
+
+    # Idempotent: a second pass has nothing left to repair and rewrites nothing.
+    snapshot = {i["id"]: world.dossier(i).read_bytes() for i in final}
+    world.run("--refresh-verified-epss")
+    assert {i["id"]: world.dossier(i).read_bytes() for i in final} == snapshot
 
 
 def test_item_without_epss_is_still_repaired(world):
