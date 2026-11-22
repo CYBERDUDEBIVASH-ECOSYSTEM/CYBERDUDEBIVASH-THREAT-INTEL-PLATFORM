@@ -220,6 +220,7 @@ export async function runAutonomousCanary({
             });
             check("rearm_after_rollover", changed.status === 200 && changed.body?.watch, "WATCH_REARM_DENIED");
             pick = replacement;
+            ev.matched_item_id = replacement.item_id;
             generation = fresh.generated_at;
             rearmed = true;
             waited = 0;
