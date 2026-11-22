@@ -1,0 +1,61 @@
+# P0: catch actual EICC browser regressions on the PR head BEFORE Pages deployment.
+# Read-only, separate concurrency and no Cloudflare/GitHub Pages write permissions.
+name: P0 EICC Premerge Browser Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'js/metric-normalize.js'
+      - 'js/homepage-dashboard-engine.js'
+      - 'js/apex-dashboard-snapshot.js'
+      - 'js/sentinel-live-feeds.js'
+      - 'render-test/verify_eicc_zero_fabrication_states.js'
+      - 'tests/test_homepage_live_status_truth_p0.py'
+      - '.github/workflows/p0-eicc-premerge-gate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p0-eicc-premerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: EICC zero-fabrication real-browser regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PR merge candidate (read-only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Verify canonical frontend dependency order and status truth
+        run: python3 -m unittest discover -s tests -p 'test_homepage_live_status_truth_p0.py' -v
+
+      - name: Verify protected frontend asset hashes
+        run: python3 scripts/frontend_integrity.py verify
+
+      - name: Build local browser artifact (no deployment)
+        env:
+          REPORT_RETENTION_DAYS: '3'
+        run: python3 scripts/build_dist_artifact.py
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Install pinned headless-browser dependency
+        run: |
+          npm install --no-save playwright@1.56.1
+          npx playwright install --with-deps chromium
+
+      - name: P0 EICC real-browser regressions (36+ checks)
+        run: node render-test/verify_eicc_zero_fabrication_states.js dist
