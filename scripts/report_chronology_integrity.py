@@ -26,6 +26,19 @@ BASE = "https://intel.cyberdudebivash.com"
 MAX_ERRORS = 40
 
 
+def owned_report_path(url: str, report_id: str) -> str | None:
+    """Return the catalog path for an advertised first-party HTML dossier."""
+    if not isinstance(url, str):
+        raise ValueError("Invalid report URL type")
+    path = url.removeprefix(BASE) if url.startswith(BASE + "/") else url
+    if not path.startswith("/reports/"):
+        return None
+    match = PATH_RX.fullmatch(path)
+    if not match or match["slug"] != report_id:
+        raise ValueError("First-party report URL does not identify its advisory")
+    return path
+
+
 def _utc(value: Any) -> datetime | None:
     """Naive timestamps are ambiguous; never infer a timezone."""
     if not isinstance(value, str) or not UTC_RX.fullmatch(value):

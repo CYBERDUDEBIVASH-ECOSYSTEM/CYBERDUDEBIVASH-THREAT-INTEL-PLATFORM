@@ -2060,6 +2060,13 @@ jobs:
       # Runs only when ALL prior required steps passed (default: if success()).
       # R2 is NEVER overwritten with corrupt/small manifests.
       # -----------------------------------------------------------------------
+      # The collector adds records to api/feed.json after the initial render.
+      # Materialize their advertised files before any catalog or feed promotion.
+      - name: Prepare locally missing current customer reports
+        if: env.PIPELINE_LOCKED != 'true'
+        timeout-minutes: 10
+        run: python3 scripts/prepare_current_report_files.py
+
       - name: "STAGE 3.5 - Upload Intel to Cloudflare R2 (MANDATORY)"
         # v184.1 fix: was 12 -- r2_upload.py's own HTML-report-upload phase
         # documents a 45-min internal hard timeout ("50 concurrent requests,
@@ -2158,6 +2165,10 @@ jobs:
         timeout-minutes: 5
         run: |
           set -euo pipefail
+          if [ "${{ steps.p0-report-publish-initial.outcome }}" != "success" ]; then
+            echo "::error::Current report publication did not succeed. Catalog promotion blocked."
+            exit 1
+          fi
           python3 scripts/build_reports_index.py
           python3 scripts/report_chronology_integrity.py --catalog api/reports/index.json
 
@@ -3068,6 +3079,7 @@ jobs:
       # (not byte-for-byte idempotent even when api/feed.json is unchanged).
       # -----------------------------------------------------------------------
       - name: "STAGE 3.93.19 - Re-generate Immutable API Manifests (post-enrichment)"
+        id: final-manifest-parity
         timeout-minutes: 5
         run: |
           python3 scripts/generate_api_manifests.py
@@ -3112,6 +3124,7 @@ jobs:
       # HARD FAIL: blocks git commit if any bundle is missing or empty.
       # -----------------------------------------------------------------------
       - name: "STAGE 3.93.5 - Validate Immutable API Manifests (deployment gate)"
+        id: final-manifest-validation
         timeout-minutes: 5
         run: python3 scripts/validate_api_manifests.py
 
@@ -3535,8 +3548,13 @@ jobs:
       # while customers still had an old/absent paid artifact.
       # -----------------------------------------------------------------------
       - name: "STAGE 4.1 - Final R2 Full Sync (v184.0 -- post-git-push complete feed)"
+        id: final-customer-manifests
         timeout-minutes: 5
-        if: ${{ !cancelled() && steps.r2-manifest-integrity.outcome == 'success' && steps.pipeline_stage_1_3.outcome == 'success' && steps.p0_apex_enrichment.outcome == 'success' }}
+        if: >-
+          ${{ !cancelled() && steps.r2-manifest-integrity.outcome == 'success' &&
+          steps.pipeline_stage_1_3.outcome == 'success' && steps.p0_apex_enrichment.outcome == 'success' &&
+          steps.p0-report-publish-initial.outcome == 'success' && steps.r2-reports-index-integrity.outcome == 'success' &&
+          steps.final-manifest-parity.outcome == 'success' && steps.final-manifest-validation.outcome == 'success' }}
         env:
           # P0 paid manifest is written exactly once, after its FINAL
           # generation. Stage 3.93.6 does not set this flag.
@@ -3592,7 +3610,7 @@ jobs:
       # -----------------------------------------------------------------------
       - name: "Upload Intel State to R2 (final, post-enrichment)"
         timeout-minutes: 5
-        if: ${{ !cancelled() && env.PIPELINE_LOCKED != 'true' && steps.pipeline_stage_1_3.outcome == 'success' && steps.r2-manifest-integrity.outcome == 'success' && steps.p0_apex_enrichment.outcome == 'success' }}
+        if: ${{ !cancelled() && env.PIPELINE_LOCKED != 'true' && steps.pipeline_stage_1_3.outcome == 'success' && steps.r2-manifest-integrity.outcome == 'success' && steps.p0_apex_enrichment.outcome == 'success' && steps.final-customer-manifests.outcome == 'success' }}
         continue-on-error: true
         env:
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
@@ -5020,7 +5038,7 @@ jobs:
         # R20: late upload is a production mutation. Pipeline success alone
         # is insufficient if feed enrichment/regression subsequently failed.
         # Do not overwrite last-known-good R2 state from an invalid run.
-        if: ${{ !cancelled() && env.PIPELINE_LOCKED != 'true' && steps.pipeline_stage_1_3.outcome == 'success' && steps.p0_apex_enrichment.outcome == 'success' && steps.p0_regression_suite.outcome == 'success' }}
+        if: ${{ !cancelled() && env.PIPELINE_LOCKED != 'true' && steps.pipeline_stage_1_3.outcome == 'success' && steps.p0_apex_enrichment.outcome == 'success' && steps.p0_regression_suite.outcome == 'success' && steps.final-customer-manifests.outcome == 'success' }}
         continue-on-error: true
         env:
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}

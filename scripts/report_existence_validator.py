@@ -47,6 +47,7 @@ from r2_report_publisher import (  # noqa: E402
     load_publish_state,
     report_window_hours,
 )
+from report_chronology_integrity import owned_report_path  # noqa: E402
 
 REPO_ROOT     = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_FEEDS = [
@@ -82,8 +83,18 @@ def validate(
         if not ru:
             continue
         if ru.startswith("http"):
-            # External URL — not a local report, skip
-            continue
+            try:
+                ru = owned_report_path(ru, item.get("id"))
+            except ValueError:
+                # Legacy absolute links which are outside the publisher's
+                # rolling window were never local materialization obligations.
+                _, age = canonical_age(item, now)
+                if age is not None and age > window_hours:
+                    continue
+                missing.append(f"[INVALID_REPORT_IDENTITY] id={item.get('id', '?')[:32]}")
+                continue
+            if ru is None:
+                continue
         if not ru.startswith("/reports/"):
             # Schema drift, not a windowed-generation artifact -- always a
             # real defect regardless of age, so never deferred.
