@@ -144,7 +144,12 @@ try {
     const feed = await feedItems(key);
     const evidence = mode === "pro"
       ? await runProCanary({ http, key, runId, feedItems: feed.items, log })
-      : await runAutonomousCanary({ http, key, runId, feedItems: feed.items, feedGeneratedAt: feed.generated_at, sleep, log });
+      : await runAutonomousCanary({
+        http, key, runId, feedItems: feed.items, feedGeneratedAt: feed.generated_at,
+        // Only invoked once if the canonical feed generation changes while
+        // waiting. An inaccessible or stale feed never causes a synthetic PASS.
+        loadFeed: () => readFreshFeed(key), sleep, log,
+      });
     out({ result: evidence.result, feed_generated_at: feed.generated_at, evidence }, evidence.result === "PASS" ? 0 : 1);
   }
   if (mode === "enterprise") {
