@@ -94,6 +94,7 @@ import dossier_integrity as _di  # noqa: E402
 import ecosystem_showcase as _eco  # noqa: E402 (presentation only; no publication authority)
 import tlp_policy as _tlp  # noqa: E402  (fail-closed anonymous-publication authority)
 import public_report_actor as _public_actor  # noqa: E402 (shared S1/catalog public masking)
+from report_chronology_integrity import owned_report_path  # noqa: E402
 
 # P0 v134.0: IOC enforcement imports
 try:
@@ -3014,7 +3015,14 @@ def main(argv=None) -> int:
         if args.only_missing:
             _existing_ru = (item.get("report_url") or "").strip()
             if _existing_ru.startswith("http"):
-                continue
+                # Repair only an exact owned URL for this record's destination.
+                # The publisher validates current advertised identities separately.
+                try:
+                    _existing_ru = owned_report_path(_existing_ru, intel_id)
+                except ValueError:
+                    continue
+                if _existing_ru is None or _existing_ru != "/" + rel_report_path(item).relative_to(REPO_ROOT).as_posix():
+                    continue
             if _existing_ru.startswith("/reports/") and (REPO_ROOT / _existing_ru.lstrip("/")).exists():
                 if not args.refresh_verified_epss:
                     continue
