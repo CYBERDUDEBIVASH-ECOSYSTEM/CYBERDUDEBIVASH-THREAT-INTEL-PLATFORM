@@ -32,7 +32,8 @@ def select_report_probes(
     if not isinstance(manifest_files, dict):
         raise ReportSelectionBlocked("Deployment manifest files must be an object")
     result = audit_catalog(
-        catalog, latest_limit=latest_limit, history_limit=historical_limit
+        catalog, latest_limit=latest_limit, history_limit=historical_limit,
+        historical_strategy="spread",  # oldest + time-spread older cohort
     )
     if result["verdict"] != "CHRONOLOGY_PRECHECK_ONLY":
         raise ReportSelectionBlocked(

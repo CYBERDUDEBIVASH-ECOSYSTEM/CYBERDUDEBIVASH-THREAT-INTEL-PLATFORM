@@ -58,3 +58,16 @@ def test_r2_first_empty_pages_manifest_is_precheck_only():
     latest, historical = select_report_probes({"reports": [item]}, manifest_files={})
     assert latest == [item["url"]]
     assert historical == []
+
+def test_convergence_candidate_spread_is_bounded_and_keeps_oldest():
+    rows = [report(f"{i:02x}", f"2025-10-01T{i:02d}:00:00Z")
+            for i in range(24)]
+    latest, history = select_report_probes(
+        {"reports": list(reversed(rows))}, manifest_files={},
+        latest_limit=4, historical_limit=5,
+    )
+    assert latest == [r["url"] for r in reversed(rows[-4:])]
+    assert history == [rows[i]["url"] for i in (0, 5, 10, 14, 19)]
+    assert not set(latest).intersection(history)
+    assert len(history) == 5
+

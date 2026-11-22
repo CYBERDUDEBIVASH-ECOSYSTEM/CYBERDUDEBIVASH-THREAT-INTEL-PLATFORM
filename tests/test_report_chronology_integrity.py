@@ -36,6 +36,34 @@ class ChronologyTests(unittest.TestCase):
         self.assertEqual(result["historical"], [r["url"] for r in rows[:2]])
         self.assertFalse(set(result["latest"]) & set(result["historical"]))
 
+    def test_spread_history_is_disjoint_bounded_and_retains_oldest(self):
+        rows = [report(f"{i:016x}", f"2026-10-18T{i:02d}:00:00Z",
+                       month="10") for i in range(24)]
+        base = catalog(list(reversed(rows)))
+        spread = audit_catalog(base, latest_limit=4, history_limit=5,
+                               historical_strategy="spread",
+                               at=datetime(2026, 10, 19, 10, tzinfo=timezone.utc))
+        legacy = audit_catalog(base, latest_limit=4, history_limit=5,
+                               at=datetime(2026, 10, 19, 10, tzinfo=timezone.utc))
+        self.assertEqual(spread["verdict"], "CHRONOLOGY_PRECHECK_ONLY")
+        self.assertEqual(spread["latest"], [r["url"] for r in reversed(rows[-4:])])
+        self.assertEqual(spread["historical"],
+                         [rows[i]["url"] for i in (0, 5, 10, 14, 19)])
+        self.assertEqual(legacy["historical"], [r["url"] for r in rows[:5]])
+        self.assertEqual(len(set(spread["historical"])), 5)
+        self.assertFalse(set(spread["latest"]) & set(spread["historical"]))
+        self.assertFalse(spread["delivery_certified"])
+
+    def test_spread_history_does_not_fabricate_when_cohort_is_small(self):
+        rows = [report(f"{i:016x}", f"2026-10-18T{i:02d}:00:00Z")
+                for i in range(3)]
+        r = audit_catalog(catalog(rows), latest_limit=1, history_limit=5,
+                          historical_strategy="spread")
+        self.assertEqual(r["historical"], [rows[0]["url"], rows[1]["url"]])
+        self.assertFalse(r["delivery_certified"])
+        with self.assertRaises(ValueError):
+            audit_catalog(catalog(rows), historical_strategy="unsafe-bypass")
+
     def test_future_report_fails_closed(self):
         future = report("aaaaaaaaaaaaaaaa", "2026-10-20T08:00:00Z")
         result = audit_catalog(catalog([future]),

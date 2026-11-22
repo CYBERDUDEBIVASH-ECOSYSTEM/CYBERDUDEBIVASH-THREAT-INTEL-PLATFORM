@@ -52,10 +52,13 @@ def _utc(value: Any) -> datetime | None:
 
 def audit_catalog(
     source: Any, *, latest_limit: int = 15, history_limit: int = 5,
-    at: datetime | None = None, maximum_age_hours: int | None = None
+    at: datetime | None = None, maximum_age_hours: int | None = None,
+    historical_strategy: str = "oldest",
 ) -> dict[str, Any]:
     if latest_limit < 1 or history_limit < 1:
         raise ValueError("Probe limits must be positive")
+    if historical_strategy not in ("oldest", "spread"):
+        raise ValueError("Invalid historical sampling strategy")
     clock = at if at is not None else datetime.now(timezone.utc)
     if clock.tzinfo is None or clock.utcoffset() is None:
         raise ValueError("Audit clock must be timezone-aware")
@@ -122,7 +125,21 @@ def audit_catalog(
     ordered = sorted(checked, key=lambda row: (row[0], row[1]))
     # Present latest newest-first. History excludes EVERY latest entry.
     latest = [BASE + path for _, path in reversed(ordered[-latest_limit:])]
-    historical = [BASE + path for _, path in ordered[:-latest_limit][:history_limit]]
+    older = ordered[:-latest_limit]
+    if historical_strategy == "spread" and history_limit > 1 and len(older) > history_limit:
+        # P0: sample the historical cohort ACROSS canonical UTC chronology,
+        # retaining the absolute oldest entry and the newest pre-latest entry.
+        # Choosing only the first five caused a real 2026-11-22 convergence
+        # failure: all five were authoritatively publication-gated (HTTP 404).
+        # These are candidate URLs only; delivery still REQUIRES actual HTTP
+        # 200 and the strict report publication gate remains unchanged.
+        # Exactly history_limit probes, no extra Cloudflare requests.
+        n = len(older) - 1
+        d = history_limit - 1
+        positions = [(i * n + d // 2) // d for i in range(history_limit)]
+        historical = [BASE + older[i][1] for i in positions]
+    else:
+        historical = [BASE + path for _, path in older[:history_limit]]
     return {"verdict": "CHRONOLOGY_PRECHECK_ONLY", "total": len(records),
             "valid_timestamped": len(checked), "defects": [],
             "latest": latest, "historical": historical,
