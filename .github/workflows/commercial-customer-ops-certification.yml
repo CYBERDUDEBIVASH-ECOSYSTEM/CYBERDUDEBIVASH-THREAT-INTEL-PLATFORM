@@ -244,18 +244,31 @@ jobs:
           trap cleanup_all EXIT
 
           echo "--- Provisioning controlled test keys (PRO, ENTERPRISE, MSSP) ---"
+          # P0: register each issued key BEFORE provisioning the next tier.
+          # A partial failure must not orphan earlier controlled credentials.
           PRO_JSON=$(provision PRO)
-          ENT_JSON=$(provision ENTERPRISE)
-          MSSP_JSON=$(provision MSSP)
           PRO_KEY=$(echo "$PRO_JSON" | jq -r '.key // empty')
-          ENT_KEY=$(echo "$ENT_JSON" | jq -r '.key // empty')
-          MSSP_KEY=$(echo "$MSSP_JSON" | jq -r '.key // empty')
-
-          if [ -z "$PRO_KEY" ] || [ -z "$ENT_KEY" ] || [ -z "$MSSP_KEY" ]; then
-            echo "FAIL: provisioning did not return a key for one or more tiers -- ADMIN_SECRET likely does not match the Worker's env.ADMIN_SECRET, or /api/admin/keys is unreachable"
+          if [ -z "$PRO_KEY" ]; then
+            echo "FAIL: PRO key provisioning returned no key"
             exit 1
           fi
-          PROVISIONED_KEYS=("$PRO_KEY" "$ENT_KEY" "$MSSP_KEY")
+          PROVISIONED_KEYS+=("$PRO_KEY")
+
+          ENT_JSON=$(provision ENTERPRISE)
+          ENT_KEY=$(echo "$ENT_JSON" | jq -r '.key // empty')
+          if [ -z "$ENT_KEY" ]; then
+            echo "FAIL: ENTERPRISE key provisioning returned no key"
+            exit 1
+          fi
+          PROVISIONED_KEYS+=("$ENT_KEY")
+
+          MSSP_JSON=$(provision MSSP)
+          MSSP_KEY=$(echo "$MSSP_JSON" | jq -r '.key // empty')
+          if [ -z "$MSSP_KEY" ]; then
+            echo "FAIL: MSSP key provisioning returned no key"
+            exit 1
+          fi
+          PROVISIONED_KEYS+=("$MSSP_KEY")
           echo "Provisioned 3 controlled test keys (values not printed)."
 
           # NOTE: handleSLAReport (sla-monitor.js) has its own auth-presence
