@@ -234,7 +234,7 @@ def _platform_open(req, *, timeout):
             or parsed.port not in (None, 443)
             or parsed.username is not None or parsed.password is not None
             or parsed.fragment
-            or not (path in ("/", "/api/feed.json") or is_report or is_status)):
+            or not (path in ("/", "/api/feed.json", "/api/reports/index.json") or is_report or is_status)):
         raise ValueError("CONVERGENCE_UNTRUSTED_PLATFORM_ORIGIN_OR_PATH")
     return urllib.request.build_opener(_ConvergenceNoRedirects).open(req, timeout=timeout)
 
@@ -976,6 +976,34 @@ def _historical_evidence_missing_reason() -> str:
     return generic
 
 
+def _fetch_live_customer_ready_catalog() -> dict:
+    """Single bounded GET of the Worker's existing public ready-only index.
+
+    _platform_open enforces canonical HTTPS/no redirects/no arbitrary paths.
+    The global 80-request / 600-second envelope also applies to this read.
+    """
+    if not _claim_request():
+        raise RuntimeError("Live ready-only catalog not probed: request budget exhausted")
+    remaining = MAX_PROTOCOL_SECONDS - (time.monotonic() - _PROTOCOL_STARTED)
+    req = urllib.request.Request(
+        PAGES_BASE_URL + "/api/reports/index.json", method="GET",
+        headers={"User-Agent": "CDB-Sentinel-Convergence/184.0",
+                 "Cache-Control": "no-cache", "Accept": "application/json"},
+    )
+    with _platform_open(req, timeout=max(0.1, min(HTTP_TIMEOUT, remaining))) as response:
+        if response.status != 200:
+            raise RuntimeError("Live ready-only catalog did not return HTTP 200")
+        # The expected customer-ready catalog is ~16KB. A hard 1 MB ceiling
+        # prohibits oversized/hostile responses and uncontrolled R2 reads.
+        raw = response.read(1_048_577)
+    if len(raw) > 1_048_576:
+        raise RuntimeError("Live ready-only catalog exceeds byte budget")
+    parsed = json.loads(raw.decode("utf-8"))
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Live ready-only catalog is not a JSON object")
+    return parsed
+
+
 def phase5_historical_report_audit(feed: List[dict], manifest: dict) -> PhaseResult:
     """
     Phase 5: Historical report continuity verification.
@@ -990,7 +1018,31 @@ def phase5_historical_report_audit(feed: List[dict], manifest: dict) -> PhaseRes
     log.info("=" * 70)
     t0 = time.monotonic()
 
-    _, historical_urls = _extract_report_urls(feed, manifest)
+    # The local schema-1 R2 index includes BOTH ready and policy-withheld
+    # candidate reports. It proves UTC chronology but not public eligibility.
+    # Run its existing strict precheck, then cross-check against a bounded
+    # live schema-2 ready-only Worker snapshot. No extra publication-status
+    # GETs for already known withheld historical candidates.
+    _extract_report_urls(feed, manifest)
+    try:
+        from customer_ready_historical_selection import select_authorized_historical_probes
+        ready_catalog = _fetch_live_customer_ready_catalog()
+        local_catalog = json.loads(REPORTS_CATALOG_PATH.read_text(encoding="utf-8"))
+        historical_urls = select_authorized_historical_probes(
+            local_catalog, ready_catalog, manifest_files=manifest.get("files", {}),
+            latest_limit=MAX_REPORT_PROBES,
+            historical_limit=HIST_PROBE_COUNT,
+        )
+        log.info("Phase 5: live ready-only catalog selected %d historical reports; delivery unverified",
+                 len(historical_urls))
+    except (OSError, UnicodeError, ValueError, RuntimeError, urllib.error.URLError) as exc:
+        reason = "HISTORICAL READY-ONLY EVIDENCE MISSING: " + str(exc)[:240]
+        log.error("Phase 5: %s", reason)
+        return PhaseResult(
+            phase=5, name="Historical Report Audit", success=False,
+            probes=[], duration_s=round(time.monotonic() - t0, 1),
+            message=reason,
+        )
 
     if not historical_urls:
         # Missing audit evidence cannot establish historical continuity. Do not
