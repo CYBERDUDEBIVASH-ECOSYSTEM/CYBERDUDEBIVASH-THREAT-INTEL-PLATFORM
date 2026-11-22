@@ -1023,7 +1023,18 @@ def phase5_historical_report_audit(feed: List[dict], manifest: dict) -> PhaseRes
     # Run its existing strict precheck, then cross-check against a bounded
     # live schema-2 ready-only Worker snapshot. No extra publication-status
     # GETs for already known withheld historical candidates.
-    _extract_report_urls(feed, manifest)
+    _, local_historical = _extract_report_urls(feed, manifest)
+    if not local_historical:
+        # A <=15-record candidate index has no disjoint historical sample.
+        # Preserve the original fail-closed diagnostic WITHOUT consuming an
+        # extra Worker request or changing the shared Cloudflare budget.
+        reason = _historical_evidence_missing_reason()
+        log.error("Phase 5: %s", reason)
+        return PhaseResult(
+            phase=5, name="Historical Report Audit", success=False,
+            probes=[], duration_s=round(time.monotonic() - t0, 1),
+            message=reason,
+        )
     try:
         from customer_ready_historical_selection import select_authorized_historical_probes
         ready_catalog = _fetch_live_customer_ready_catalog()
