@@ -3,6 +3,7 @@
 import io
 import json
 import sys
+from datetime import datetime, timezone
 import urllib.error
 from pathlib import Path
 
@@ -29,6 +30,41 @@ class Response:
 
     def read(self, size):
         return json.dumps(self.value).encode("utf-8")
+
+
+def _ready_history_catalog(monkeypatch, tmp_path, history_urls):
+    """Synthetic local candidate + public ready-only catalog, no network.
+
+    The approved history cohort is followed by exactly fifteen newer items.
+    It exercises the true Phase-5 selector instead of mocking its authority.
+    """
+    latest_urls = [
+        f"{dcv.PAGES_BASE_URL}/reports/2026/10/intel--{i + 100:024x}.html"
+        for i in range(dcv.MAX_REPORT_PROBES)
+    ]
+    rows = []
+    for index, url in enumerate(history_urls + latest_urls):
+        path = url.removeprefix(dcv.PAGES_BASE_URL)
+        rows.append({
+            "id": path.rsplit("/", 1)[-1].removesuffix(".html"),
+            "path": path, "url": url,
+            "timestamp": f"2026-10-01T{index:02}:00:00Z",
+            "tlp": "TLP:CLEAR",
+        })
+    local_path = tmp_path / "index.json"
+    local_path.write_text(json.dumps({"reports": rows}), encoding="utf-8")
+    monkeypatch.setattr(dcv, "REPORTS_CATALOG_PATH", local_path)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    public = {
+        "schema_version": "2.0.0", "feed_type": "customer_ready_catalog",
+        "policy_version": "1.0.0",
+        "generated_at": stamp, "validated_at": stamp,
+        "total_candidates": len(rows), "customer_ready_count": len(rows),
+        "withheld_count": 0, "total_reports": len(rows),
+        "reports_listed": len(rows), "reports": rows,
+    }
+    monkeypatch.setattr(dcv, "_fetch_live_customer_ready_catalog", lambda: public)
+    return rows
 
 
 @pytest.fixture
@@ -110,7 +146,7 @@ def test_rate_limited_status_get_preserves_global_cooldown(
 
 
 def test_incomplete_historical_sample_is_explicit_and_fail_closed(
-    monkeypatch, clean_budget
+    monkeypatch, clean_budget, tmp_path
 ):
     urls = [
         f"{dcv.PAGES_BASE_URL}/reports/2026/10/intel--{i:024x}.html"
@@ -145,7 +181,7 @@ def test_incomplete_historical_sample_is_explicit_and_fail_closed(
             error="NOT_PROBED: shared request/time budget exhausted",
         ),
     ]
-    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *args: ([], urls))
+    _ready_history_catalog(monkeypatch, tmp_path, urls)
     monkeypatch.setattr(dcv, "_probe_batch", lambda *args: (results, 3, 1))
 
     phase = dcv.phase5_historical_report_audit([], {})
@@ -178,6 +214,15 @@ def test_all_gate_rejected_reports_do_not_certify_historical_delivery(
         ]
     }), encoding="utf-8")
     monkeypatch.setattr(dcv, "REPORTS_CATALOG_PATH", catalog)
+    # All twenty candidates are explicitly withheld; the v2 public-ready
+    # source contains ZERO history. Phase5 must fail before any report probes.
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    monkeypatch.setattr(dcv, "_fetch_live_customer_ready_catalog", lambda: {
+        "schema_version": "2.0.0", "feed_type": "customer_ready_catalog",
+        "policy_version": "1.0.0", "generated_at": stamp, "validated_at": stamp,
+        "total_candidates": 20, "customer_ready_count": 0, "withheld_count": 20,
+        "total_reports": 20, "reports_listed": 0, "reports": [],
+    })
     publication_reads = []
 
     def urlopen(req, **kwargs):
@@ -206,15 +251,15 @@ def test_all_gate_rejected_reports_do_not_certify_historical_delivery(
     assert phase1.success and phase2.success
     assert not phase3.success and not phase4.success and not phase5.success
     assert "positive_report_200=False" in phase3.message
-    assert "HISTORICAL POSITIVE EVIDENCE MISSING" in phase5.message
-    assert len(phase5.probes) == dcv.HIST_PROBE_COUNT
+    assert "HISTORICAL READY-ONLY EVIDENCE MISSING" in phase5.message
+    assert phase5.probes == []
     assert dcv._REQUESTS_USED <= dcv.MAX_TOTAL_REQUESTS
     assert len(publication_reads) == 20
 
 
 
-def test_historical_verified_200_plus_expected_gate_rejection_can_pass(
-    monkeypatch, clean_budget
+def test_historical_verified_200_plus_new_gate_rejection_blocks_release(
+    monkeypatch, clean_budget, tmp_path
 ):
     urls = [
         f"{dcv.PAGES_BASE_URL}/reports/2026/10/intel--{i:024x}.html"
@@ -229,11 +274,13 @@ def test_historical_verified_200_plus_expected_gate_rejection_can_pass(
             gate_rejected=True,
         ),
     ]
-    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *args: ([], urls))
+    _ready_history_catalog(monkeypatch, tmp_path, urls)
     monkeypatch.setattr(dcv, "_probe_batch", lambda *args: (samples, 2, 0))
 
     phase = dcv.phase5_historical_report_audit([], {})
-    assert phase.success is True
+    # The public v2 index approved BOTH rows. A later gate rejection of one
+    # is publication drift and blocks release despite another HTTP 200.
+    assert phase.success is False
     assert "1/1 historical reports accessible" in phase.message
     assert "1 excluded as expected publication-gate rejections" in phase.message
 
