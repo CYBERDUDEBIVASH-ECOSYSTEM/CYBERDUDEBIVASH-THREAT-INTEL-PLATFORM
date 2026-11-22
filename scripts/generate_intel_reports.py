@@ -2878,6 +2878,100 @@ def _local_dossier_epss_matches(path: Path, expected_percent: float) -> bool:
         return False
 
 
+# Severity parity -- sibling of the EPSS repair above, for the same reason.
+# The customer-ready catalog (scripts/build_reports_index.py) advertises
+# dossier_integrity.severity_basis(<final feed item>)["display"] -- the SAME
+# authority this script renders into dossier S1. A dossier rendered BEFORE
+# CVSS arrived (NVD/OSV enrichment lands after the orchestrator's render pass)
+# keeps its pre-enrichment label ("UNRATED") while the catalog later advertises
+# the CVSS band, and --only-missing never revisits an existing file. Observed:
+# sentinel-apex run #239, intel--1017421c...: catalog CRITICAL (CVSS 9.1), live
+# dossier UNRATED -> customer_report_fetchback_probe.mjs
+# REPORT_SEVERITY_METADATA_DIVERGENCE (HARD FAIL) -> STAGE 5.9.2 skipped.
+#
+# Same safety envelope as the EPSS repair: opt-in (--refresh-verified-epss),
+# only in-window items, only an already-existing canonical dossier, a small
+# per-run cap, and the re-render must reproduce the expected label or the
+# original bytes are kept (fail closed; the fetch-back stays red). It can never
+# change a TLP decision, publish anything itself, or raise the publish budget.
+P0_MAX_VERIFIED_SEVERITY_REPAIRS = 5
+_VERIFIED_SEVERITY_LABELS = frozenset(
+    {"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNRATED", "UNKNOWN"})
+# Must stay in lockstep with reportSeverityMatchesCatalog() in
+# scripts/customer_report_fetchback_probe.mjs (the gate this repairs for);
+# tests/test_p0_report_severity_refresh.py cross-checks the two on shared HTML.
+_S1_SEVERITY_CHIP_RE = re.compile(
+    r"<div\s+class=['\"]kv-key['\"]>Severity</div>\s*"
+    r"<div\s+class=['\"]kv-val['\"]><span\s+class=['\"]sev-chip\s+"
+    r"sev-(?:CRITICAL|HIGH|MEDIUM|LOW|INFO)['\"]>"
+    r"(CRITICAL|HIGH|MEDIUM|LOW|UNRATED|UNKNOWN)</span>", re.I)
+
+
+def _proven_severity_report_index() -> Dict[str, str]:
+    """Read the current public feed once; map id -> the S1 label the catalog advertises.
+
+    Reuses dossier_integrity.severity_basis (the single severity authority shared
+    by dossier S1 and build_reports_index.py). Items with no stated severity are
+    skipped (the catalog derives those from risk score; never invent a label
+    here), as are duplicate ids (ambiguous) and non-list/unreadable feeds.
+    """
+    path = REPO_ROOT / "api" / "feed.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, list):
+        return {}
+    index: Dict[str, str] = {}
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        key = item["id"]
+        if key in seen:
+            duplicates.add(key)
+            continue
+        seen.add(key)
+        stated = str(item.get("severity") or "").strip().upper()
+        if not stated or stated == "UNKNOWN":
+            continue
+        try:
+            basis = _di.severity_basis(item, item.get("cvss_score"), _kev_confirmed_check(item))
+        except Exception:
+            continue
+        label = str(basis.get("display") or "").strip().upper()
+        if label in _VERIFIED_SEVERITY_LABELS:
+            index[key] = label
+    for key in duplicates:
+        index.pop(key, None)
+    return index
+
+
+def _dossier_severity_matches_value(html_text: str, expected_label: str) -> bool:
+    """Compare the dossier S1 'Severity' chip directly with the expected label."""
+    if not isinstance(html_text, str) or expected_label not in _VERIFIED_SEVERITY_LABELS:
+        return False
+    start = re.search(r"<div\s+class=['\"]section['\"]\s+id=['\"]s1['\"]>", html_text, re.I)
+    if not start:
+        return False
+    tail = html_text[start.end():]
+    end = re.search(r"<div\s+class=['\"]section['\"]\s+id=['\"]s2['\"]>", tail, re.I)
+    if not end:
+        return False
+    shown = _S1_SEVERITY_CHIP_RE.search(tail[:end.start()])
+    return bool(shown) and shown.group(1).upper() == expected_label
+
+
+def _local_dossier_severity_matches(path: Path, expected_label: str) -> bool:
+    try:
+        if not path.is_file() or not 0 < path.stat().st_size <= _P0_EPSS_REPORT_MAX_BYTES:
+            return False
+        return _dossier_severity_matches_value(path.read_text(encoding="utf-8"), expected_label)
+    except (OSError, UnicodeError):
+        return False
+
+
 def main(argv=None) -> int:
     global MANIFEST_PATH
 
@@ -2899,8 +2993,11 @@ def main(argv=None) -> int:
     parser.add_argument("--refresh-verified-epss", action="store_true",
                         help="Only with --only-missing and --since-hours: refresh at most "
                              "three in-window existing dossiers whose HTML EPSS conflicts "
-                             "with the verified current feed; uses the normal quota-guarded "
-                             "report publisher, never this script's deprecated R2 uploader.")
+                             "with the verified current feed, and at most five whose S1 "
+                             "severity label conflicts with the catalog's (same "
+                             "dossier_integrity.severity_basis authority); uses the normal "
+                             "quota-guarded report publisher, never this script's deprecated "
+                             "R2 uploader.")
     parser.add_argument("--since-hours", type=float, default=None,
                         help="P0 R2 cost fix: only render/touch items whose canonical "
                              "timestamp is within the last N hours. Default: unbounded "
@@ -2965,6 +3062,8 @@ def main(argv=None) -> int:
     only_missing_candidates = 0  # P0.2: items --only-missing actually had to act on
     _verified_epss_by_id = _proven_epss_report_index() if args.refresh_verified_epss else {}
     _ep_ss_repair_attempts = 0
+    _verified_severity_by_id = _proven_severity_report_index() if args.refresh_verified_epss else {}
+    _severity_repair_attempts = 0
     r2_upload_failed = 0
     excluded_by_window = 0  # P0 R2 cost fix: items --since-hours excluded, untouched
     t_start = time.monotonic()
@@ -3012,6 +3111,7 @@ def main(argv=None) -> int:
         # with no backing file falls through to the normal render+write+
         # validate path below.
         _refresh_ep_ss = None
+        _refresh_severity = None
         if args.only_missing:
             _existing_ru = (item.get("report_url") or "").strip()
             if _existing_ru.startswith("http"):
@@ -3027,17 +3127,27 @@ def main(argv=None) -> int:
                 if not args.refresh_verified_epss:
                     continue
                 _expected_ep_ss = _verified_epss_by_id.get(intel_id)
-                if (_expected_ep_ss is None or
-                    _ep_ss_repair_attempts >= P0_MAX_VERIFIED_EPSS_REPAIRS or
+                _expected_severity = _verified_severity_by_id.get(intel_id)
+                if ((_expected_ep_ss is None and _expected_severity is None) or
                     not _within_report_window(item, args.since_hours, _window_now)):
                     continue
                 _canonical_report_path = rel_report_path(item)
                 if _existing_ru != "/" + _canonical_report_path.relative_to(REPO_ROOT).as_posix():
                     continue
-                if _local_dossier_epss_matches(_canonical_report_path, _expected_ep_ss):
+                # EPSS parity and severity parity are independent, each with its own
+                # per-run cap; an item is re-rendered if either one conflicts.
+                if (_expected_ep_ss is not None and
+                    _ep_ss_repair_attempts < P0_MAX_VERIFIED_EPSS_REPAIRS and
+                    not _local_dossier_epss_matches(_canonical_report_path, _expected_ep_ss)):
+                    _refresh_ep_ss = _expected_ep_ss
+                    _ep_ss_repair_attempts += 1
+                if (_expected_severity is not None and
+                    _severity_repair_attempts < P0_MAX_VERIFIED_SEVERITY_REPAIRS and
+                    not _local_dossier_severity_matches(_canonical_report_path, _expected_severity)):
+                    _refresh_severity = _expected_severity
+                    _severity_repair_attempts += 1
+                if _refresh_ep_ss is None and _refresh_severity is None:
                     continue
-                _refresh_ep_ss = _expected_ep_ss
-                _ep_ss_repair_attempts += 1
             only_missing_candidates += 1
 
         # P0 R2 COST INCIDENT FIX: --since-hours gate applies regardless of
@@ -3094,6 +3204,15 @@ def main(argv=None) -> int:
         html_text: Optional[str] = None
         try:
             html_text = render_report(item, args.public_prefix)
+            if (_refresh_severity is not None and
+                not _dossier_severity_matches_value(html_text, _refresh_severity)):
+                # Same fail-closed rule as the EPSS repair below: never swap a
+                # published dossier for bytes that still disagree with the
+                # catalog. Original file stays; the mandatory fetch-back stays red.
+                log(f"REPORT SEVERITY REPAIR WITHHELD [{intel_id}]: rendered dossier "
+                    f"still does not show the catalog severity ({_refresh_severity})", "error")
+                errors += 1
+                continue
             if (_refresh_ep_ss is not None and
                 not _dossier_epss_matches_value(html_text, _refresh_ep_ss)):
                 # Never replace a previously accessible report with HTML that
@@ -3275,6 +3394,10 @@ def main(argv=None) -> int:
     # sites share this one script, so this one write path covers both --
     # no duplicated observability logic per Principle 3 (single source of
     # truth).
+    if args.refresh_verified_epss:
+        log(f"[SEVERITY-REFRESH] verified_labels={len(_verified_severity_by_id)} "
+            f"re_render_attempts={_severity_repair_attempts}/{P0_MAX_VERIFIED_SEVERITY_REPAIRS}")
+
     if args.only_missing:
         _repaired = written
         _failed = only_missing_candidates - written
