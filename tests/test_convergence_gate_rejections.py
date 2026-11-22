@@ -10,6 +10,7 @@ and a fake clock.
 """
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -47,6 +48,32 @@ def _write_catalog(monkeypatch, tmp_path, urls):
     catalog.write_text(json.dumps({"reports": records}), encoding="utf-8")
     monkeypatch.setattr(dcv, "REPORTS_CATALOG_PATH", catalog)
     return catalog
+
+
+def _install_public_ready_catalog(monkeypatch, *, excluded_urls=()):
+    """Mock a fresh v2 public approval snapshot without network or R2 writes.
+
+    The schema-1 local index still contains withheld candidates. Only rows
+    listed in this independent v2 fixture are valid historical selectors.
+    """
+    local = json.loads(dcv.REPORTS_CATALOG_PATH.read_text(encoding="utf-8"))
+    ready = [
+        {**row, "tlp": "TLP:CLEAR"}
+        for row in local["reports"]
+        if row["url"] not in set(excluded_urls)
+    ]
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    v2 = {
+        "schema_version": "2.0.0", "feed_type": "customer_ready_catalog",
+        "generated_at": stamp, "validated_at": stamp, "policy_version": "1.0.0",
+        "total_candidates": len(local["reports"]),
+        "customer_ready_count": len(ready),
+        "withheld_count": len(local["reports"]) - len(ready),
+        "total_reports": len(local["reports"]), "reports_listed": len(ready),
+        "reports": ready,
+    }
+    monkeypatch.setattr(dcv, "_fetch_live_customer_ready_catalog", lambda: v2)
+    return v2
 
 
 @pytest.fixture(autouse=True)
@@ -226,14 +253,19 @@ def test_phase5_still_excludes_gate_rejections_from_continuity(monkeypatch, tmp_
     manifest = {"files": {u[len(BASE) + 1:]: {} for u in REJECTED + OK_REPORTS + extra}}
     _write_catalog(monkeypatch, tmp_path, REJECTED + OK_REPORTS + extra)
     hist = sorted(extra)[:dcv.HIST_PROBE_COUNT]
+    _install_public_ready_catalog(monkeypatch, excluded_urls={hist[0]})
+    # The Worker withheld hist[0] BEFORE the audit: it must never be probed.
+    # hist[1] was approved, but is newly denied at HEAD time. That approval
+    # drift is a blocking failure even though four other reports still work.
     net = FakeNet({hist[0]: 404, hist[1]: 404})
     dcv._GATE_VERDICTS.clear()
     with patch.object(dcv, "_http_probe", side_effect=net.probe), \
-         patch.object(dcv, "_is_expected_publication_rejection", side_effect=lambda u: u == hist[0]), \
+         patch.object(dcv, "_is_expected_publication_rejection", side_effect=lambda u: u == hist[1]), \
          patch.object(dcv.time, "sleep"):
         p5 = dcv.phase5_historical_report_audit([], manifest)
-    total = len(hist) - 1
-    assert f"{total - 1}/{total} historical reports accessible" in p5.message
+    assert not p5.success
+    assert hist[0] not in net.calls
+    assert "4/4 historical reports accessible" in p5.message
     assert "1 excluded as expected publication-gate rejections" in p5.message
 
 
@@ -399,14 +431,16 @@ def test_missing_historical_evidence_blocks_high_score_protocol(monkeypatch, tmp
 
 
 def test_complete_historical_sample_still_passes(monkeypatch):
-    history = OK_REPORTS[:dcv.HIST_PROBE_COUNT]
+    # The local candidate index contains 20 records. All 20 are explicitly
+    # approved by a fresh public v2 catalog; five older August dossiers must
+    # independently return HTTP 200 before Phase 5 can certify success.
+    _install_public_ready_catalog(monkeypatch)
     net = FakeNet({})
-    monkeypatch.setattr(dcv, "_extract_report_urls", lambda *a: ([], history))
     monkeypatch.setattr(dcv, "_http_probe", net.probe)
     monkeypatch.setattr(dcv.time, "sleep", lambda *a: None)
-    result = dcv.phase5_historical_report_audit([], {})
+    result = dcv.phase5_historical_report_audit([], MANIFEST)
     assert result.success
-    assert net.calls == history
+    assert net.calls == HISTORY
     assert len(result.probes) == dcv.HIST_PROBE_COUNT
 
 
