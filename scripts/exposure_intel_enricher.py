@@ -307,24 +307,53 @@ ADAPTERS: List[Adapter] = [
 ]
 
 
-def _http_json(url: str, headers: Dict[str, str]) -> Optional[Any]:
-    """GET -> parsed JSON, None on other failures, RATE_LIMITED on HTTP 429.
+# Allow only registered commercial connector HTTPS origins (never arbitrary URLs).
+# These are literal hosts from ADAPTERS' build_request functions; no wildcard
+# subdomains, embedded credentials, non-443 ports, or internal network targets.
+AUTHORIZED_API_HOSTS = frozenset({
+    "api.shodan.io", "search.censys.io", "api.zoomeye.org", "fofa.info",
+    "api.binaryedge.io", "app.netlas.io", "api.criminalip.io", "www.onyphe.io",
+    "api.greynoise.io", "www.virustotal.com", "api.securitytrails.com",
+    "www.whoisxmlapi.com", "api.dnslytics.net", "api.any.run",
+    "www.hybrid-analysis.com",
+})
 
-    Never raises: external failure must not abort the customer publisher.
-    Credentials in URL queries are never logged.
+
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse all redirects to prevent SSRF and credential-bearing URL leakage."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_HTTP_OPENER = urllib.request.build_opener(_NoRedirects())
+
+
+def _http_json(url: str, headers: Dict[str, str]) -> Optional[Any]:
+    """GET from approved HTTPS origins only; no redirect or extra destinations.
+
+    Returns parsed JSON, None for failures, RATE_LIMITED for HTTP 429.
+    No exception leaves this helper, no credentials appear in log messages.
     """
-    req = urllib.request.Request(url, headers={"Accept": "application/json", **headers})
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        parsed = urllib.parse.urlsplit(url)
+        host = (parsed.hostname or "").lower()
+        if (parsed.scheme != "https" or host not in AUTHORIZED_API_HOSTS
+                or parsed.port not in (None, 443)
+                or parsed.username is not None or parsed.password is not None):
+            log.warning("blocked unapproved commercial exposure endpoint")
+            return None
+        req = urllib.request.Request(url, headers={"Accept": "application/json", **headers})
+        with _HTTP_OPENER.open(req, timeout=HTTP_TIMEOUT) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
-        host = urllib.parse.urlsplit(url).netloc
         if e.code == 429:
             log.warning("HTTP 429 from %s -- suspend adapter for this run", host)
             return RATE_LIMITED
         log.warning("HTTP %s from %s", e.code, host)
     except Exception as e:  # noqa: BLE001 - deliberately total
-        log.warning("request failed (%s): %s", urllib.parse.urlsplit(url).netloc, e)
+        log.warning("request failed from approved exposure endpoint (%s): %s",
+                    host if 'host' in locals() else "unknown", type(e).__name__)
     return None
 
 
