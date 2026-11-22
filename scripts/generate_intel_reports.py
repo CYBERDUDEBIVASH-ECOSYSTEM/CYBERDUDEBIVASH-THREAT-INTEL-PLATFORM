@@ -2919,9 +2919,10 @@ def _proven_severity_report_index() -> Dict[str, str]:
     """Read the current public feed once; map id -> the S1 label the catalog advertises.
 
     Reuses dossier_integrity.severity_basis (the single severity authority shared
-    by dossier S1 and build_reports_index.py). Items with no stated severity are
-    skipped (the catalog derives those from risk score; never invent a label
-    here), as are duplicate ids (ambiguous) and non-list/unreadable feeds.
+    by dossier S1 and build_reports_index.py). Missing/UNKNOWN input severity
+    is eligible ONLY when severity_basis independently produces a CVSS-rated
+    label; heuristic-only labels are never promoted. Duplicate IDs and
+    non-list/unreadable feeds remain excluded.
     """
     path = REPO_ROOT / "api" / "feed.json"
     try:
@@ -2942,11 +2943,15 @@ def _proven_severity_report_index() -> Dict[str, str]:
             continue
         seen.add(key)
         stated = str(item.get("severity") or "").strip().upper()
-        if not stated or stated == "UNKNOWN":
-            continue
         try:
             basis = _di.severity_basis(item, item.get("cvss_score"), _kev_confirmed_check(item))
         except Exception:
+            continue
+        # A late-arriving authoritative CVSS rating may coexist with UNKNOWN
+        # heuristic severity. The catalog still advertises the CVSS band; do
+        # not omit such records from the bounded dossier parity repair.
+        # Without a CVSS rating, missing/UNKNOWN input remains excluded.
+        if (not stated or stated == "UNKNOWN") and not basis.get("rated"):
             continue
         label = str(basis.get("display") or "").strip().upper()
         if label in _VERIFIED_SEVERITY_LABELS:
