@@ -7,6 +7,32 @@ const root = process.env.SENTINEL_UI_TEST_ROOT || path.join(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'js/homepage-dashboard-engine.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'css/homepage-design-system.css'), 'utf8');
+test('headline strip follows the verified feed through recovery and a later outage', () => {
+ const start = source.indexOf('        let _tickerClickTargets = []');
+ const end = source.indexOf('        function renderMapTicker(data)', start);
+ assert.ok(start >= 0 && end > start);
+ const outer = {style:{}};
+ const inner = {dataset:{}, style:{setProperty(){}}, innerHTML:'', addEventListener(){}, replaceChildren(){this.innerHTML='';}};
+ let receive, mapItems;
+ const context = {
+  window:{ApexDashboardSnapshot:{current:()=>null, subscribe:callback=>{receive=callback;}}},
+  document:{getElementById:id=>id==='threat-ticker-outer'?outer:inner},
+  renderMapTicker:items=>{mapItems=items;}, getSeverity:()=> 'HIGH',
+  extractCVEs:()=>[], cleanText:String, _cdbEsc:String
+ };
+ vm.runInNewContext(source.slice(start, end), context);
+ const feed = {items:[{title:'Verified update',risk_score:8}]};
+ assert.equal(outer.style.display,'none');
+ receive({mode:'live',feed});
+ assert.match(inner.innerHTML,/Verified update/);
+ assert.equal(mapItems,feed.items);
+ assert.equal(outer.style.display,'block');
+ receive({mode:'degraded',feed});
+ assert.equal(outer.style.display,'none');
+ assert.equal(inner.innerHTML,'');
+ assert.equal(mapItems.length,0);
+ assert.doesNotMatch(source,/\brender(?:Map)?Ticker\(data\);/);
+});
 const start = source.indexOf('        function renderMapTicker(data)');
 const end = source.indexOf('\n        // ── MISP Export', start);
 assert.ok(start >= 0 && end > start);

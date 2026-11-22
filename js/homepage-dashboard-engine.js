@@ -2061,8 +2061,6 @@ ${item.stix_object_count != null ? `<div class="apex-kv" style="margin-top:4px;"
             renderRiskDonut({ critical, high, medium, low });
             renderMitreHeatmap(data);
             renderSourceBreakdown(data);
-            renderTicker(data);
-            renderMapTicker(data);
 
             // P0 FIX (zero-fabrication): this used to be a severity-weighted
             // composite score (a hardcoded feed count of 74 baked in) with
@@ -2967,6 +2965,18 @@ ${item.stix_object_count != null ? `<div class="apex-kv" style="margin-top:4px;"
         // get right and no injection surface, regardless of what a
         // malicious source/report URL field might contain.
         let _tickerClickTargets = [];
+
+        // Headline strips share the dashboard's verified public feed. Embedded
+        // analytics can load independently, including during a customer 503.
+        function updateHeadlineTickers(snapshot) {
+            const items = snapshot && snapshot.mode === 'live' ? snapshot.feed.items : [];
+            renderTicker(items);
+            renderMapTicker(items);
+        }
+        if (window.ApexDashboardSnapshot) {
+            window.ApexDashboardSnapshot.subscribe(updateHeadlineTickers);
+            updateHeadlineTickers(window.ApexDashboardSnapshot.current());
+        }
         /**
          * Allow-lists a URL for the ticker's click-to-open action.
          * Same allow-only-http(s)-or-relative convention already used by
@@ -2990,7 +3000,13 @@ ${item.stix_object_count != null ? `<div class="apex-kv" style="margin-top:4px;"
         function renderTicker(data) {
             const outer = document.getElementById('threat-ticker-outer');
             const inner = document.getElementById('threat-ticker-inner');
-            if (!inner || !data.length) return;
+            if (!outer || !inner) return;
+            if (!data.length) {
+                _tickerClickTargets = [];
+                inner.replaceChildren();
+                outer.style.display = 'none';
+                return;
+            }
 
             if (!inner.dataset.clickBound) {
                 inner.dataset.clickBound = '1';
@@ -3033,9 +3049,12 @@ ${item.stix_object_count != null ? `<div class="apex-kv" style="margin-top:4px;"
                 // correctly for card titles elsewhere in this file (see its
                 // definition below, reused here rather than re-implemented).
                 const id = cves[0] || _cdbEsc(cleanText(d.title).slice(0, 30)) + '\u2026';
+                const risk = (typeof d.risk_score === 'number' || (typeof d.risk_score === 'string' && d.risk_score.trim()))
+                    ? Number(d.risk_score) : NaN;
+                const riskLabel = Number.isFinite(risk) && risk >= 0 && risk <= 10 ? risk + '/10' : 'unavailable';
                 return `<span class="ticker-item" data-ticker-url-idx="${idx}" style="cursor:pointer;">
                     <span class="ticker-sev" style="background:${col}22;color:${col};">${sev}</span>
-                    ${id} \u2014 RISK ${d.risk_score}/10
+                    ${id} \u2014 RISK ${riskLabel}
                 </span><span class="ticker-sep">◆</span>`;
             }).join('');
 

@@ -87,6 +87,12 @@ const text = (page, id) => page.evaluate((i) => { const e = document.getElementB
   try {
     // --- 9h stale: no expired intelligence displayed ----------------------
     const s = await scenario(browser, cw, 9, '/index.html');
+    check('HTTP 503 with JSON shows degraded API readiness', /API degraded/i.test(await text(s.page, 'acs-st-api')));
+    check('a configured Watchdog indicates that the feed is stale',
+      /awaiting fresh intelligence/i.test(await text(s.page, 'acs-st-watchdog')));
+    check('the LIVE INTEL strip clears all headlines without a verified live feed',
+      await s.page.evaluate(() => getComputedStyle(document.getElementById('threat-ticker-outer')).display === 'none'
+        && document.getElementById('threat-ticker-inner').childElementCount === 0));
     check('fixture: real brief is 503 degraded without nested expired content',
       s.brief.status === 503 && s.brief.body.items.length === 0 && s.brief.body.last_authoritative === null);
     const crit = await text(s.page, 'acs-critical');

@@ -28,12 +28,17 @@
     if (!health || typeof health.watch_store !== 'string') return { state: 'unknown', label: 'Watchdog status unknown' };
     if (health.watch_store !== 'ok') return { state: 'offline', label: 'Watchdog store unavailable' };
     if (health.autonomous_evaluation !== 'configured') return { state: 'degraded', label: 'Watchdog degraded' };
+    if (health.freshness_status && health.freshness_status !== FRESH) return { state: 'degraded', label: 'Watchdog awaiting fresh intelligence' };
     return { state: 'active', label: 'Watchdog active' };
   }
 
-  /** API reachability LED: proven only by a parsed JSON response. */
-  function apiState(respondedWithJson, fetchFailed) {
+  /** Use the health response status and its freshness evidence when available. */
+  function apiState(respondedWithJson, fetchFailed, httpStatus, freshness) {
     if (fetchFailed) return { state: 'offline', label: 'API unreachable' };
+    if (typeof httpStatus === 'number') {
+      if (httpStatus !== 200 || (freshness && freshness !== FRESH)) return { state: 'degraded', label: 'API degraded' };
+      if (freshness !== FRESH) return { state: 'unknown', label: 'API status unknown' };
+    }
     if (respondedWithJson === true) return { state: 'ok', label: 'API operational' };
     return { state: 'unknown', label: 'API status unknown' };
   }

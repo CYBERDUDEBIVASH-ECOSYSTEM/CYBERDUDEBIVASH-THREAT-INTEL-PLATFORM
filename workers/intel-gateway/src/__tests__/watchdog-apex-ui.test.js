@@ -59,6 +59,11 @@ test("status model: proven states map to their LED and text", () => {
   assert.equal(S.watchdogState({ watch_store: "ok", autonomous_evaluation: "unavailable" }).state, "degraded");
   assert.equal(S.watchdogState({ watch_store: "unavailable" }).state, "offline");
   assert.equal(S.apiState(true).state, "ok");
+  assert.equal(S.apiState(true, false, 503, "STALE").state, "degraded");
+  assert.equal(S.apiState(true, false, 200, "STALE").state, "degraded");
+  assert.equal(S.apiState(true, false, 200).state, "unknown");
+  assert.equal(S.apiState(true, false, 200, "FRESH").state, "ok");
+  assert.equal(S.watchdogState({ watch_store: "ok", autonomous_evaluation: "configured", freshness_status: "STALE" }).state, "degraded");
   assert.equal(S.destinationState("active").state, "verified");
   assert.equal(S.destinationState("pending").state, "pending");
   assert.equal(S.destinationState("failed").state, "failed");
