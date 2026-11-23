@@ -186,18 +186,44 @@ def test_G_real_cloudflare_error_page_bytes_fail_through_fetch_parser(monkeypatc
     class _Resp:
         status = 503
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
         def read(self, n=-1):
             return html
-    monkeypatch.setattr(dhc.urllib.request, "urlopen", lambda req, timeout: _Resp())
+
+    class _Connection:
+        def __init__(self, host, port, timeout):
+            assert (host, port, timeout) == ("x", 443, 1)
+
+        def request(self, method, resource, headers):
+            assert (method, resource) == ("GET", "/api/health")
+            assert "User-Agent" in headers
+
+        def getresponse(self):
+            return _Resp()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(dhc.http.client, "HTTPSConnection", _Connection)
     status, body, err = dhc.fetch_json("https://x/api/health", 1)
     assert (status, body) == (503, None) and "invalid JSON" in err
     assert deploy(LIVE_OK, (status, body, err))["deployment_verdict"] == "FAIL"
+
+
+@pytest.mark.parametrize("url", [
+    "file:///etc/passwd",
+    "http://127.0.0.1/api/health",
+    "https://operator:secret@intel.cyberdudebivash.com/api/health",
+    "https://intel.cyberdudebivash.com:444/api/health",
+    "https://intel.cyberdudebivash.com/api/health#fragment",
+])
+def test_health_probe_rejects_unsafe_url_schemes_without_network(url, monkeypatch):
+    def forbidden_connection(*args, **kwargs):
+        raise AssertionError("unsafe probe must not open a connection")
+
+    monkeypatch.setattr(dhc.http.client, "HTTPSConnection", forbidden_connection)
+    status, body, err = dhc.fetch_json(url, 1)
+    assert (status, body) == (None, None)
+    assert "unsafe health probe URL" in err
 
 
 @pytest.mark.parametrize("mutate", [
