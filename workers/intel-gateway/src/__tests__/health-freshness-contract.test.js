@@ -96,6 +96,27 @@ test("items without a valid id do not count as intelligence", () => {
   assert.equal(e.reason, "no_intelligence_items");
 });
 
+test("P0 health fails closed on mixed malformed items and duplicate advisory IDs", () => {
+  const cases = [
+    [{ id: "intel--a" }, { severity: "HIGH" }],
+    [{ id: "intel--a" }, null],
+    [{ id: "intel--a" }, { id: "intel--a" }],
+    [{ id: " intel--a " }, { id: "intel--a" }],
+  ];
+  for (const items of cases) {
+    const e = evaluatePublicIntelligence(feed({ count: items.length, items }), NOW);
+    assert.deepEqual(
+      [e.http_status, e.reason, e.checks.publication_integrity],
+      [503, "invalid_intelligence_items", "invalid_items"],
+      JSON.stringify(items),
+    );
+  }
+  const legacy = feed({ items: [{ id: "intel--a" }, { id: "intel--a" }] });
+  delete legacy.count;
+  assert.equal(evaluatePublicIntelligence(legacy, NOW).reason, "invalid_intelligence_items");
+  assert.equal(evaluatePublicIntelligence(feed(), NOW).http_status, 200);
+});
+
 test("malformed feed structures -> 503 invalid_feed_structure", () => {
   for (const bad of ["not json object", [1, 2], { generated_at: isoAgo(60) }, { items: "x" }]) {
     const e = evaluatePublicIntelligence(bad, NOW);
