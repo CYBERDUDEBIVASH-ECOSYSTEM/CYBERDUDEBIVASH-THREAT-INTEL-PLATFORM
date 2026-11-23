@@ -304,6 +304,11 @@ jobs:
       - name: "Install pytest + PyYAML"
         run: pip install pytest pyyaml --quiet
 
+      # P0: bot-token-bearing Telegram URLs may appear in urllib exceptions.
+      # Offline-only regression: no external request or Cloudflare write.
+      - name: "P0 Telegram alert transport secret-redaction controls (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_alert_engine_telegram_secret_redaction.py
+
       # P0 #819/#909: strict UTC chronology and manifest selection are release
       # blockers, not merely diagnostics. This explicit offline PR gate ensures
       # the new sanitized reason codes and the existing fail-closed controls
