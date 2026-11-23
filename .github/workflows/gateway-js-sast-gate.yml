@@ -1,0 +1,74 @@
+# P0 zero-trust code scanning for the customer-facing Intel Gateway JavaScript.
+# Always produces the SAME check on every PR, even when the code scanner
+# itself is provably non-applicable; this avoids required-check deadlocks.
+# Separate from the full-inventory SAST to avoid increasing its 2 AM schedule
+# or bypassing its pre-existing 81-high/high Python remediation backlog.
+name: Gateway JavaScript SAST Gate v201.0
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - 'workers/intel-gateway/src/**'
+      - 'scripts/ci_gateway_js_sast.py'
+      - 'tests/test_gateway_js_sast_gate.py'
+      - '.github/workflows/gateway-js-sast-gate.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-js-sast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway-js-sast:
+    name: Gateway JavaScript SAST (required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact source (no stored token)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+
+      # Scanner/verdict logic is tested offline first: wrong SHA, path
+      # traversal/symlinks, malformed/missing Semgrep output, false zero exit,
+      # scanner errors, and missing coverage must all fail closed.
+      - name: Mandatory offline SAST negative controls
+        run: |
+          python -m pip install 'pytest==8.4.2' --quiet
+          python -m pytest -q --strict-markers tests/test_gateway_js_sast_gate.py
+
+      - name: Resolve exact-commit changed-JS scan scope
+        id: scope
+        env:
+          SAST_EVENT: ${{ github.event_name }}
+          SAST_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          SAST_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/ci_gateway_js_sast.py --scope-file .gateway-js-sast-targets.json
+
+      # No scanner dependency download or registry lookup for docs-only PRs.
+      # Semgrep is pinned; changed-source scope, parser failures and scan
+      # coverage are verified by our fail-closed wrapper, not a soft SARIF.
+      - name: Install pinned Semgrep only for changed Gateway JS
+        if: steps.scope.outputs.need_scan == 'true'
+        run: python -m pip install 'semgrep==1.148.0' --quiet
+
+      - name: Fail closed on JavaScript ERROR findings or scan uncertainty
+        if: steps.scope.outputs.need_scan == 'true'
+        run: python3 scripts/ci_gateway_js_sast.py --scan-from .gateway-js-sast-targets.json
+
+      - name: Confirm non-applicable diff was explicitly classified
+        if: steps.scope.outputs.need_scan == 'false'
+        run: python3 scripts/ci_gateway_js_sast.py --scan-from .gateway-js-sast-targets.json
