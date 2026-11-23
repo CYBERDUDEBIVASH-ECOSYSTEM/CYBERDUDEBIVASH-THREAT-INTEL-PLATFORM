@@ -189,24 +189,50 @@ def reclaim_apt_cache() -> bool:
 
 
 def reclaim_tmp() -> int:
-    """Remove common runner /tmp/ temp files."""
+    """Reclaim only old, explicitly owned SENTINEL APEX runner scratch.
+
+    Never glob or delete global /tmp paths: unrelated processes, secret
+    material, logs, or upload artifacts may coexist on the runner. The
+    separate reclaim_pip_cache() already handles the pip cache.
+    Missing/invalid ownership proof is a no-op; disk thresholds still fail
+    closed in mode_preflight() and mode_predist().
+    """
+    runner_temp = os.environ.get("RUNNER_TEMP", "")
+    if not runner_temp:
+        return 0
+    root = Path(runner_temp)
+    if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+        return 0
+    scratch = root / "cdb-apex-scratch"
+    marker = scratch / ".cdb-apex-owned"
+    if scratch.is_symlink() or not scratch.is_dir():
+        return 0
+    try:
+        if (marker.is_symlink()
+                or marker.read_text(encoding="utf-8").strip()
+                != "SENTINEL_APEX_RUNNER_SCRATCH_V1"):
+            return 0
+    except (OSError, UnicodeError):
+        return 0
+    cutoff = time.time() - 86400  # Never interfere with live job artifacts.
     removed = 0
-    for pattern in ["/tmp/pip-*", "/tmp/*.log", "/tmp/*.tmp", "/tmp/*.zip"]:
-        import glob
-        for p in glob.glob(pattern):
-            try:
-                if os.path.isdir(p):
-                    shutil.rmtree(p, ignore_errors=True)
-                else:
-                    os.unlink(p)
-                removed += 1
-            except OSError:
-                pass
-    # Also clear pip user cache
-    pip_user = Path.home() / ".cache" / "pip"
-    if pip_user.exists():
-        shutil.rmtree(pip_user, ignore_errors=True)
-        removed += 1
+    for entry in scratch.iterdir():
+        # Never traverse or unlink symlinks. Only direct children within
+        # this exact marker-protected scratch are eligible for stale cleanup.
+        if entry.name == marker.name or entry.is_symlink():
+            continue
+        try:
+            if entry.lstat().st_mtime >= cutoff:
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            elif entry.is_file():
+                entry.unlink()
+            else:
+                continue
+            removed += 1
+        except OSError:
+            continue
     return removed
 
 
