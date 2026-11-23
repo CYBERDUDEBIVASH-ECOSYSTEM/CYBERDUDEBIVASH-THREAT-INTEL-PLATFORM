@@ -48,13 +48,13 @@ Read-only: two GETs, no R2, no KV, no writes to production.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
+from urllib.parse import urlsplit
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -94,6 +94,7 @@ REASON_TO_INTEL_STATUS = {
     # Items/count problems are evaluated independently of freshness.
     "no_intelligence_items": {contract.FRESH, contract.STALE, contract.FUTURE, contract.MISSING, contract.INVALID},
     "publication_count_mismatch": {contract.FRESH, contract.STALE, contract.FUTURE, contract.MISSING, contract.INVALID},
+    "invalid_intelligence_items": {contract.FRESH, contract.STALE, contract.FUTURE, contract.MISSING, contract.INVALID},
     # Fresh feed bytes can still be unservable because the public TLP guard
     # blocks a restricted, unlabeled or malformed advisory. It is a valid
     # unhealthy deployment response, NEVER customer-release certification.
@@ -262,23 +263,46 @@ def evaluate_deployment(live, health, now=None) -> dict:
 
 
 def fetch_json(url: str, timeout: float, headers: dict | None = None):
-    """(status|None, body|None, err|None). Keeps HTTP error bodies (503 envelopes)."""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Cache-Control": "no-cache", **(headers or {})})
+    """HTTPS-only probe with bounded body and no non-HTTPS URL handlers.
+
+    Preserve valid non-200 response bodies, especially structured 503 health
+    envelopes. Redirects are not followed or reissued to another origin.
+    """
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status, raw = resp.status, resp.read(MAX_BODY_BYTES + 1)
-    except urllib.error.HTTPError as e:
-        status, raw = e.code, e.read(MAX_BODY_BYTES + 1)
-    except Exception as e:  # DNS / TLS / reset / timeout
-        return None, None, f"{type(e).__name__}: {e}"
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or not parsed.hostname or
+                parsed.username is not None or parsed.password is not None or
+                parsed.fragment or parsed.port not in (None, 443)):
+            return None, None, "unsafe health probe URL: HTTPS port 443 without userinfo required"
+    except (TypeError, ValueError):
+        return None, None, "unsafe health probe URL: invalid authority"
+
+    resource = parsed.path or "/"
+    if parsed.query:
+        resource += "?" + parsed.query
+
+    # HTTPSConnection exclusively supports HTTPS/TLS, without file:/ftp:/gopher:
+    # handlers or redirect-following that could escape the original origin.
+    connection = http.client.HTTPSConnection(parsed.hostname, port=443, timeout=timeout)
+    try:
+        connection.request("GET", resource, headers={
+            "User-Agent": USER_AGENT, "Cache-Control": "no-cache", **(headers or {}),
+        })
+        response = connection.getresponse()
+        status, raw = response.status, response.read(MAX_BODY_BYTES + 1)
+    except Exception as exc:  # DNS, TLS verification, reset, timeout
+        return None, None, f"{type(exc).__name__}: {exc}"
+    finally:
+        connection.close()
+
     if len(raw) > MAX_BODY_BYTES:
         return status, None, "body exceeds health contract size"
     if not raw.strip():
         return status, None, "empty body"
     try:
         return status, json.loads(raw.decode("utf-8")), None
-    except Exception as e:
-        return status, None, f"invalid JSON: {e}"
+    except Exception as exc:
+        return status, None, f"invalid JSON: {exc}"
 
 
 def probe(base: str, timeout: float = 15.0) -> tuple:

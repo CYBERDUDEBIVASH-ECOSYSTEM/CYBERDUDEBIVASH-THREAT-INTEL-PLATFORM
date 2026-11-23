@@ -126,9 +126,14 @@ export function evaluatePublicIntelligence(feedData, nowMs = Date.now()) {
   }
 
   const items = feedData.items;
-  const validCount = items.filter(
+  const itemIds = items.filter(
     (i) => i && typeof i === "object" && !Array.isArray(i) && typeof i.id === "string" && i.id.trim() !== "",
-  ).length;
+  ).map((i) => i.id.trim());
+  const validCount = itemIds.length;
+  // A non-empty publication with repeated IDs or malformed members is not
+  // a coherent customer feed, even if count === items.length. This check is
+  // bounded to the already-materialized feed array and adds no R2/KV calls.
+  const itemsOk = validCount === items.length && new Set(itemIds).size === validCount;
   const freshness = classifyManifestFreshness(feedData.generated_at, nowMs);
   const generatedAt = typeof feedData.generated_at === "string" ? feedData.generated_at : null;
   // A published count, when present, is a typed integrity assertion.
@@ -148,11 +153,12 @@ export function evaluatePublicIntelligence(feedData, nowMs = Date.now()) {
   const checks = {
     intelligence_available: validCount > 0 ? "ok" : "empty",
     intelligence_freshness: freshness.state,
-    publication_integrity: countOk ? "ok" : "count_mismatch",
+    publication_integrity: !countOk ? "count_mismatch" : (itemsOk ? "ok" : "invalid_items"),
   };
 
   if (validCount === 0) return base("unhealthy", "no_intelligence_items", intelligence, checks);
   if (!countOk) return base("unhealthy", "publication_count_mismatch", intelligence, checks);
+  if (!itemsOk) return base("unhealthy", "invalid_intelligence_items", intelligence, checks);
   if (freshness.state === STATES.FRESH) return base("ok", null, intelligence, checks);
   if (freshness.state === STATES.STALE) return base("degraded", REASON_BY_STATE[STATES.STALE], intelligence, checks);
   return base("unhealthy", REASON_BY_STATE[freshness.state], intelligence, checks);
@@ -198,7 +204,7 @@ export function publicationEnvelope(feedData, nowMs = Date.now(), capSeconds = 1
   let publication_state = intel.status;
   if (freshness_status === "EMPTY") publication_state = "empty";
   if (freshness_status === "UNAVAILABLE") publication_state = "unavailable";
-  if (evaluation.reason === "invalid_feed_structure") publication_state = "invalid";
+  if (evaluation.reason === "invalid_feed_structure" || evaluation.reason === "invalid_intelligence_items") publication_state = "invalid";
   if (evaluation.reason === "publication_count_mismatch") publication_state = "count_mismatch";
   const fields = {
     publication_state,
