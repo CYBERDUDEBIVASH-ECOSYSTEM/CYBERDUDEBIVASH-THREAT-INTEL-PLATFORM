@@ -309,6 +309,11 @@ jobs:
       - name: "P0 Telegram alert transport secret-redaction controls (offline)"
         run: python3 -m pytest -q --strict-markers tests/test_alert_engine_telegram_secret_redaction.py
 
+      # P0 zero-trust runner cleanup: only explicitly owned old scratch
+      # may be deleted. Offline filesystem regression; no /tmp mutation.
+      - name: "P0 runner temp ownership and cleanup negative controls (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_runner_disk_governor_tmp_safety.py
+
       # P0 #819/#909: strict UTC chronology and manifest selection are release
       # blockers, not merely diagnostics. This explicit offline PR gate ensures
       # the new sanitized reason codes and the existing fail-closed controls
