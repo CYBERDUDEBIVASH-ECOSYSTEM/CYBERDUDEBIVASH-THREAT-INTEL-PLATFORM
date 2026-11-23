@@ -287,9 +287,15 @@ def _tg_send(token: str, chat_id: str, text: str,
                     logger.warning("Telegram API rejected alert without an OK acknowledgement")
         except urllib.error.HTTPError as e:
             if e.code == 429:  # Rate limited
-                retry_after = int(e.headers.get("Retry-After", 5))
-                logger.warning(f"TG rate limited — sleeping {retry_after}s")
-                time.sleep(retry_after)
+                try:
+                    retry_after = int(e.headers.get("Retry-After", 5))
+                except (AttributeError, TypeError, ValueError):
+                    retry_after = 5
+                # Never let upstream input stall the publisher indefinitely.
+                retry_after = max(0, min(retry_after, 60))
+                logger.warning("Telegram rate limited; bounded retry-after=%ds", retry_after)
+                if attempt < max_retries - 1:
+                    time.sleep(retry_after)
             else:
                 logger.error(f"TG HTTP {e.code} on attempt {attempt + 1}")
         except Exception as e:
