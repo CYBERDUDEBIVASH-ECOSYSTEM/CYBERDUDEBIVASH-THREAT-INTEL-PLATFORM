@@ -1,5 +1,6 @@
 import { evaluateKeyRecordAccess } from './subscription-lifecycle.js';
 import { SWARM_MESH_CAPABILITY, tierAllowsSwarm } from './swarm-access.js';
+import { strongConsistencyEnabled, getStrongAuthState, authStateDenies } from './strong-consistency-authority.js';
 
 const enc = new TextEncoder();
 const MESH_VERSION = 'cdb.mesh.v1';
@@ -9,6 +10,10 @@ const TOKEN_SCOPE = 'mesh.invoke';
 const MAX_INPUT_BYTES = 32768;
 const MAX_OUTPUT_BYTES = 524288;
 const MAX_MESH_RESPONSE_BYTES = 65536;
+const MAX_SESSION_TOKEN_LENGTH = 8192;
+const MAX_SESSION_LIFETIME_SECONDS = 86400;
+const SESSION_CLOCK_SKEW_SECONDS = 60;
+const CUSTOMER_TOKEN_ISSUER = 'SENTINEL-APEX';
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const ROUTES = Object.freeze({
   'POST /api/intel/correlate': Object.freeze({ capability: SWARM_MESH_CAPABILITY }),
@@ -66,13 +71,17 @@ function fromBase64Url(value) {
 }
 
 async function verifyJwtHs256(token, secret) {
-  if (!secret || enc.encode(secret).byteLength < 32) return null;
+  // Canonical /auth/login and SSO sessions have a 24-hour expiry, an issuer,
+  // and no audience. Cyber Watchdog sessions carry aud=cdb-watchdog and MUST
+  // NOT authorize the general /api/intel/correlate mesh admission path.
+  if (typeof token !== 'string' || !token || token.length > MAX_SESSION_TOKEN_LENGTH
+      || typeof secret !== 'string' || enc.encode(secret).byteLength < 32) return null;
   const parts = token.split('.');
-  if (parts.length !== 3) return null;
+  if (parts.length !== 3 || parts.some(part => !part || !/^[A-Za-z0-9_-]+$/.test(part))) return null;
   try {
     const [headerPart, payloadPart, signaturePart] = parts;
     const header = JSON.parse(new TextDecoder().decode(fromBase64Url(headerPart)));
-    if (header?.alg !== 'HS256') return null;
+    if (!header || header.alg !== 'HS256' || header.typ !== 'JWT') return null;
     const key = await crypto.subtle.importKey(
       'raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'],
     );
@@ -82,7 +91,13 @@ async function verifyJwtHs256(token, secret) {
     if (!valid) return null;
     const payload = JSON.parse(new TextDecoder().decode(fromBase64Url(payloadPart)));
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
-    if (payload.exp && (!Number.isFinite(payload.exp) || payload.exp < Math.floor(Date.now() / 1000))) return null;
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.iss !== CUSTOMER_TOKEN_ISSUER || payload.aud !== undefined
+        || !Number.isSafeInteger(payload.iat)
+        || !Number.isSafeInteger(payload.exp)
+        || payload.iat > now + SESSION_CLOCK_SKEW_SECONDS
+        || payload.exp <= now || payload.exp <= payload.iat
+        || payload.exp - payload.iat > MAX_SESSION_LIFETIME_SECONDS) return null;
     return payload;
   } catch {
     return null;
@@ -128,6 +143,23 @@ async function resolveMeshPrincipal(request, env) {
     if (!payload) throw new MeshAccessError('mesh_auth_invalid', 401);
     const sub = typeof payload.sub === 'string' && payload.sub ? payload.sub : null;
     if (!sub) throw new MeshAccessError('mesh_auth_invalid', 401);
+    // Missing revocation or billing deny storage is not evidence of an active
+    // subscription. Do not reserve compute in the private Mesh on that basis.
+    if (typeof env?.SECURITY_HUB_KV?.get !== 'function' || typeof env?.API_KEYS_KV?.get !== 'function') {
+      throw new MeshAccessError('mesh_auth_service_unavailable', 503);
+    }
+    // Canonical resolveAuth() consults this authority first when enabled.
+    // Mesh admission must not reserve compute against a revoked customer
+    // while eventually-consistent KV still shows an earlier active state.
+    if (strongConsistencyEnabled(env)) {
+      try {
+        const customerState = await getStrongAuthState(env, `customer:${sub}`);
+        if (authStateDenies(customerState)) throw new MeshAccessError('mesh_subscription_denied', 403);
+      } catch (error) {
+        if (error instanceof MeshAccessError) throw error;
+        throw new MeshAccessError('mesh_auth_service_unavailable', 503);
+      }
+    }
     try {
       const revoked = await env.SECURITY_HUB_KV?.get(`jwt_revoked:${raw.slice(-24)}`);
       if (revoked) throw new MeshAccessError('mesh_token_revoked', 401);
@@ -154,7 +186,27 @@ async function resolveMeshPrincipal(request, env) {
   }
   if (!record || typeof record !== 'object') throw new MeshAccessError('mesh_auth_invalid', 401);
 
-  const access = evaluateKeyRecordAccess(record);
+  let effectiveRecord = record;
+  if (strongConsistencyEnabled(env)) {
+    try {
+      const [keyState, customerState] = await Promise.all([
+        getStrongAuthState(env, `key:${raw}`),
+        record.customer_id
+          ? getStrongAuthState(env, `customer:${record.customer_id}`)
+          : Promise.resolve(null),
+      ]);
+      if (authStateDenies(keyState) || authStateDenies(customerState)) {
+        throw new MeshAccessError('mesh_subscription_denied', 403);
+      }
+      // Match canonical resolveAuth(): a strongly reactivated customer
+      // is not held hostage by a stale KV subscription_status field.
+      if (customerState) effectiveRecord = { ...record, subscription_status: customerState.status };
+    } catch (error) {
+      if (error instanceof MeshAccessError) throw error;
+      throw new MeshAccessError('mesh_auth_service_unavailable', 503);
+    }
+  }
+  const access = evaluateKeyRecordAccess(effectiveRecord);
   if (!access.allowed) throw new MeshAccessError(access.error || 'mesh_subscription_denied', 403);
   const sub = String(record.customer_id || raw.slice(0, 8));
   if (!sub) throw new MeshAccessError('mesh_auth_invalid', 401);
@@ -256,6 +308,7 @@ function admissionMatches(payload, expected) {
     && payload.version === MESH_VERSION
     && payload.state === 'admitted'
     && typeof payload.execution_id === 'string'
+    && ID.test(payload.execution_id)
     && payload.tenant_id === expected.tenant_id
     && payload.mission_id === expected.mission_id
     && payload.correlation_id === expected.correlation_id
@@ -263,13 +316,17 @@ function admissionMatches(payload, expected) {
   );
 }
 
-function completionMatches(payload, session) {
+function completionMatches(payload, session, expectedOutcome) {
   return Boolean(
     payload
     && payload.version === MESH_VERSION
     && payload.mission_id === session.missionId
     && payload.execution_id === session.executionId
-    && typeof payload.state === 'string'
+    // The private Mesh must acknowledge the same operation outcome that the
+    // gateway actually recorded. A rejected/unknown completion is NOT
+    // evidence that a customer response has been certified.
+    && (expectedOutcome === 'succeeded' || expectedOutcome === 'failed')
+    && payload.state === expectedOutcome
   );
 }
 
@@ -331,7 +388,7 @@ export async function completeApexMeshBoundary(session, response, env) {
       output_sha256: await sha256Bytes(bytes),
     };
     const { response: meshResponse, payload } = await meshFetch(env, '/v1/mesh/complete', completion, session.tenantId);
-    if (!meshResponse.ok || !completionMatches(payload, session)) return fail(503, 'agent_mesh_unavailable');
+    if (!meshResponse.ok || !completionMatches(payload, session, completion.outcome)) return fail(503, 'agent_mesh_unavailable');
 
     const headers = new Headers(response.headers);
     headers.set('X-CDB-Mesh-Certified', 'true');
