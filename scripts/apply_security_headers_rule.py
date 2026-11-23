@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 REPO = Path(__file__).resolve().parent.parent
 RULE_FILE = REPO / "cloudflare" / "security_headers_transform_rule.json"
@@ -84,27 +86,68 @@ def expected_headers(rule: dict) -> dict[str, str]:
     return {k.lower(): v["value"] for k, v in rule["action_parameters"]["headers"].items()}
 
 
+class _NoBearerRedirect(urllib.request.HTTPRedirectHandler):
+    """Never relay the Cloudflare API bearer token to a redirected URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_RULESET_ENTRYPOINT = re.compile(
+    r"^/zones/[a-fA-F0-9]{32}/rulesets/phases/http_response_headers_transform/entrypoint$"
+)
+
+
 def _api(method: str, path: str, token: str, body: dict | None = None):
+    """Only the pinned Cloudflare Rulesets API; fail closed on redirects.
+
+    Restrict caller-supplied path and method BEFORE constructing a bearer
+    request. A returned zone identifier is treated as untrusted data.
+    """
+    lookup = path == f"/zones?name={ZONE_NAME}" and method == "GET" and body is None
+    entrypoint = bool(_RULESET_ENTRYPOINT.fullmatch(path))
+    ruleset = entrypoint and (
+        (method == "GET" and body is None)
+        or (method == "PUT" and isinstance(body, dict))
+    )
+    if not token or not (lookup or ruleset):
+        raise ValueError("Cloudflare Rulesets API destination or method rejected")
+    url = API + path
+    target = urlsplit(url)
+    if (target.scheme != "https" or target.netloc != "api.cloudflare.com"
+            or target.username or target.password or target.fragment
+            or target.path.find("..") != -1):
+        raise ValueError("Cloudflare Rulesets API origin rejected")
     req = urllib.request.Request(
-        API + path, method=method,
+        url, method=method,
         data=None if body is None else json.dumps(body).encode(),
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return r.status, json.loads(r.read() or b"{}")
+        opener = urllib.request.build_opener(_NoBearerRedirect)
+        with opener.open(req, timeout=30) as r:
+            payload = json.loads(r.read() or b"{}")
+            if not isinstance(payload, dict):
+                raise ValueError("Cloudflare Rulesets API response must be a JSON object")
+            return r.status, payload
     except urllib.error.HTTPError as e:
+        # Redirects return their HTTP status without ever being followed.
         try:
-            payload = json.loads(e.read() or b"{}")
-        except ValueError:
+            payload = json.loads(e.read(65536) or b"{}")
+        except (ValueError, UnicodeError):
             payload = {}
-        return e.code, payload
+        return e.code, payload if isinstance(payload, dict) else {}
+    except Exception as e:
+        # Transport exceptions can embed URLs and Authorization headers.
+        raise RuntimeError(
+            f"Cloudflare Rulesets API transport failed: {type(e).__name__}"
+        ) from None
 
 
 def _zone_id(token: str) -> str:
     status, body = _api("GET", f"/zones?name={ZONE_NAME}", token)
     if status != 200 or not body.get("result"):
-        raise RuntimeError(f"zone lookup failed ({status}): {body.get('errors')}")
+        raise RuntimeError(f"zone lookup failed ({status})")
     return body["result"][0]["id"]
 
 
@@ -113,14 +156,21 @@ def _entrypoint(token: str, zone: str) -> list[dict]:
     if status == 404:
         return []  # no response-header rules on the zone yet
     if status != 200:
-        raise RuntimeError(f"reading {PHASE} entrypoint failed ({status}): {body.get('errors')}")
+        raise RuntimeError(f"reading {PHASE} entrypoint failed ({status})")
     return body["result"].get("rules", [])
 
 
 def _headers(url: str) -> tuple[int, dict[str, str]]:
+    """Check only declared production paths, never redirected destinations."""
+    target = urlsplit(url)
+    if (target.scheme != "https" or target.netloc != "intel.cyberdudebivash.com"
+            or target.username or target.password or target.query or target.fragment
+            or target.path not in set(STATIC_PAGES) | set(WORKER_PATHS)):
+        raise ValueError("Security header verification destination rejected")
     req = urllib.request.Request(url, method="GET", headers={"User-Agent": "cdb-security-headers-verify/1"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        opener = urllib.request.build_opener(_NoBearerRedirect)
+        with opener.open(req, timeout=30) as r:
             return r.status, {k.lower(): v for k, v in r.headers.items()}
     except urllib.error.HTTPError as e:
         return e.code, {k.lower(): v for k, v in e.headers.items()}
@@ -177,7 +227,7 @@ def main(argv: list[str]) -> int:
     print(f"backup of the current entrypoint written to {backup}")
     status, body = _api("PUT", f"/zones/{zone}/rulesets/phases/{PHASE}/entrypoint", token, {"rules": merged})
     if status != 200:
-        print(f"PUT failed ({status}): {body.get('errors')}")
+        print(f"PUT failed ({status})")
         return 1
     print("rule applied")
     return 0 if verify(rule) else 1

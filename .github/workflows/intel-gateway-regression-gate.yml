@@ -319,11 +319,10 @@ jobs:
       - name: "P0 admin cache-bust redirect and secret boundary (offline)"
         run: python3 -m pytest -q --strict-markers tests/test_p0_cache_bust_redirect_controls.py
 
-      # P0: Protect disaster recovery against wrong-namespace/stale or
-      # tampered KV snapshots, bearer redirects and accidental live writes.
-      # Offline synthetic fixtures; NO R2/KV/Cloudflare operations.
-      - name: "P0 KV disaster-restore preflight and no-write negatives (offline)"
-        run: python3 -m pytest -q --strict-markers tests/test_p0_kv_restore_safety.py
+      # P0: Cloudflare Rulesets API bearer auth may never reach a redirect
+      # or unapproved path/origin; synthetic credential, no Cloudflare calls.
+      - name: "P0 Cloudflare Rulesets bearer redirect and origin controls (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_p0_cloudflare_rulesets_token_transport.py
 
       # P0 #819/#909: strict UTC chronology and manifest selection are release
       # blockers, not merely diagnostics. This explicit offline PR gate ensures
