@@ -115,7 +115,7 @@ def test_report_rejects_missing_coverage_and_errors():
     ("scanner_error", 2, "JS_SAST_SCANNER_FAILED_OR_FINDINGS"),
     ("missing_report", 1, "JS_SAST_REPORT_MISSING"),
     ("missing_coverage", 0, "JS_SAST_INCOMPLETE_SCAN"),
-    ("malformed_report", 0, "JSONDecodeError"),
+    ("malformed_report", 0, "Expecting property name"),
 ])
 def test_scan_fails_closed_on_findings_errors_and_missing_evidence(
     tmp_path, monkeypatch, case, returncode, expect
