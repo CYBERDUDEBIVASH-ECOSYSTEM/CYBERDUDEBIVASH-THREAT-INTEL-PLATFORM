@@ -102,3 +102,18 @@ def test_non_https_telegram_origin_fails_closed_without_transport(monkeypatch, c
     assert "origin policy rejected" in emitted
     assert TOKEN not in emitted
     assert CHAT_ID not in emitted
+
+
+def test_transport_setup_failure_never_raises_or_leaks_credentials(monkeypatch, caplog):
+    """An opener/proxy setup failure must be fail-closed and safe to log."""
+    def fail_build(*handlers):
+        assert alert_engine._NoTelegramRedirect in handlers
+        raise RuntimeError(f"secret={TOKEN} chat={CHAT_ID}")
+
+    monkeypatch.setattr(alert_engine.urllib.request, "build_opener", fail_build)
+    with caplog.at_level(logging.DEBUG, logger=alert_engine.logger.name):
+        assert alert_engine._tg_send(TOKEN, CHAT_ID, "synthetic", max_retries=1) is False
+    emitted = _messages(caplog)
+    assert "transport initialization failed: RuntimeError" in emitted
+    assert TOKEN not in emitted
+    assert CHAT_ID not in emitted
