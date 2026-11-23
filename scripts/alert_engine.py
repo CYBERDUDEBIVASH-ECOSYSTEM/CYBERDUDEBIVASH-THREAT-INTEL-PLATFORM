@@ -247,15 +247,21 @@ def _tg_send(token: str, chat_id: str, text: str,
         text = text[:3990] + "\n...[truncated]"
 
     url = TG_API_BASE.format(token=token, method="sendMessage")
-    target = urllib.parse.urlsplit(url)
-    # The token is embedded in the URL path per Telegram's API contract.
-    # Pin TLS and the API origin; never permit an injected query or fragment.
-    if (target.scheme != "https" or target.hostname != "api.telegram.org"
-            or target.port not in (None, 443)
-            or target.username or target.password or target.query or target.fragment):
-        logger.error("Telegram endpoint origin policy rejected")
+    try:
+        target = urllib.parse.urlsplit(url)
+        # The token is embedded in the URL path per Telegram's API contract.
+        # Pin TLS and the API origin; never permit an injected query or fragment.
+        if (target.scheme != "https" or target.hostname != "api.telegram.org"
+                or target.port not in (None, 443)
+                or target.username or target.password or target.query or target.fragment):
+            logger.error("Telegram endpoint origin policy rejected")
+            return False
+        opener = urllib.request.build_opener(_NoTelegramRedirect)
+    except Exception as exc:
+        # Handler/proxy initialization may include the credential URL in an
+        # exception. Failure here must never crash the publisher or log secrets.
+        logger.error("Telegram transport initialization failed: %s", type(exc).__name__)
         return False
-    opener = urllib.request.build_opener(_NoTelegramRedirect)
     payload = json.dumps({
         "chat_id": chat_id,
         "text": text,
