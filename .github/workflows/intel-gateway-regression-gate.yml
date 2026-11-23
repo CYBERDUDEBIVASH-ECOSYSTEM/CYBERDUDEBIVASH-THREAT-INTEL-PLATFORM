@@ -314,6 +314,11 @@ jobs:
       - name: "P0 runner temp ownership and cleanup negative controls (offline)"
         run: python3 -m pytest -q --strict-markers tests/test_runner_disk_governor_tmp_safety.py
 
+      # P0: WORKER_ADMIN_SECRET is never allowed to follow an HTTP redirect,
+      # nor reach a spoofed/HTTP origin. Entirely offline transport regression.
+      - name: "P0 admin cache-bust redirect and secret boundary (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_p0_cache_bust_redirect_controls.py
+
       # P0 #819/#909: strict UTC chronology and manifest selection are release
       # blockers, not merely diagnostics. This explicit offline PR gate ensures
       # the new sanitized reason codes and the existing fail-closed controls
