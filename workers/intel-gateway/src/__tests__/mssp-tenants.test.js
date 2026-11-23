@@ -149,6 +149,50 @@ test("isolation: tenant A is invisible and unusable for customer B", async () =>
   assert.deepEqual(listB.body.tenants.map((t) => t.tenant_id), [b]);
 });
 
+test("tenant feed requires API-key grants, never an ordinary login JWT tier", async () => {
+  const hx = h();
+  const a = await createTenant(hx, V2_A, "Tenant A");
+  const b = await createTenant(hx, V2_B, "Tenant B");
+  const login = await hx.call("POST", "/api/auth/login", { body: { api_key: V2_A } });
+  assert.equal(login.status, 200, JSON.stringify(login.body));
+  assert.ok(login.body.token);
+  for (const tenant of [a, b]) {
+    const r = await hx.call("GET", `/api/mssp/tenants/${tenant}/feed`, { bearer: login.body.token });
+    assert.equal(r.status, 403, "tier-only JWT cannot establish tenant authorization");
+    assert.equal(r.body.error, "api_key_required");
+    assert.match(r.headers.get("Cache-Control") || "", /no-store/);
+  }
+  // The same paying MSSP account still works using its original scoped API key.
+  const own = await hx.call("GET", `/api/mssp/tenants/${a}/feed`, { key: V2_A });
+  assert.equal(own.status, 200);
+  assert.equal(own.body._tenant_authorization, "enforced");
+  assert.match(own.headers.get("Cache-Control") || "", /no-store/);
+  assert.equal(own.headers.get("X-Content-Type-Options"), "nosniff");
+  const bearerKey = await hx.call("GET", `/api/mssp/tenants/${a}/feed`, { bearer: V2_A });
+  assert.equal(bearerKey.status, 200, "Bearer API key remains compatible");
+  const cross = await hx.call("GET", `/api/mssp/tenants/${b}/feed`, { key: V2_A });
+  assert.equal(cross.status, 403);
+  assert.match(cross.headers.get("Cache-Control") || "", /no-store/);
+});
+
+test("legacy MSSP API key remains compatible, but generic JWT has no tenant authority", async () => {
+  const hx = h();
+  const path = "/api/mssp/tenants/legacy-customer/feed";
+  const login = await hx.call("POST", "/api/auth/login", { body: { api_key: MSSP_LEGACY_KEY } });
+  assert.equal(login.status, 200, JSON.stringify(login.body));
+  const jwt = await hx.call("GET", path, { bearer: login.body.token });
+  assert.equal(jwt.status, 403);
+  assert.equal(jwt.body.error, "api_key_required");
+  const legacy = await hx.call("GET", path, { key: MSSP_LEGACY_KEY });
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.body._tenant_authorization, "unrestricted_legacy_key");
+  assert.match(legacy.headers.get("Cache-Control") || "", /no-store/);
+  const ent = await hx.call("POST", "/api/auth/login", { body: { api_key: ENT_KEY } });
+  assert.equal(ent.status, 200);
+  const entJwt = await hx.call("GET", path, { bearer: ent.body.token });
+  assert.equal(entJwt.status, 403);
+});
+
 test("ownership and ids never come from the request", async () => {
   const hx = h();
   for (const field of ["mssp_email", "customer_id", "owner_id", "owner", "email", "sub", "tenant_id", "id"]) {

@@ -1110,12 +1110,32 @@ export async function handleMSSPFeed(req, env, ctx, tier, items, tenant_id, req_
   if (!requireEnterprise(tier)) {
     return enterpriseDenied(`/api/mssp/tenants/${tenant_id}/feed`, req_id);
   }
-  const managedTenants = auth && Array.isArray(auth.managed_tenants) ? auth.managed_tenants : null;
+  // A tier-only JWT from /auth/login or SSO has no authoritative
+  // API-key tenant grants. Missing membership must NEVER silently become
+  // the legacy-unrestricted mode. An API key (X-API-Key or Bearer API key)
+  // is re-validated on every request and carries the actual tenant grants.
+  // This keeps legitimate API-key integrations working without extra reads.
+  if (!auth || auth.credential_type !== "api_key" || auth.jwt) {
+    return new Response(JSON.stringify({
+      error: "api_key_required",
+      message: "Tenant feeds require your API key (X-API-Key or Bearer API key).",
+      req_id,
+    }), { status: 403, headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+    } });
+  }
+  const managedTenants = Array.isArray(auth.managed_tenants) ? auth.managed_tenants : null;
   if (managedTenants !== null && !managedTenants.includes(tenant_id)) {
     return new Response(JSON.stringify({
       error: "Forbidden: this key is not authorized for the requested tenant_id",
       tenant_id, req_id,
-    }), { status: 403, headers: { "Content-Type": "application/json" } });
+    }), { status: 403, headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+    } });
   }
 
   const url = new URL(req.url);
@@ -1157,6 +1177,8 @@ export async function handleMSSPFeed(req, env, ctx, tier, items, tenant_id, req_
       "Content-Type": "application/json",
       "X-Tenant-ID": tenant_id,
       "X-Request-ID": req_id,
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 }
