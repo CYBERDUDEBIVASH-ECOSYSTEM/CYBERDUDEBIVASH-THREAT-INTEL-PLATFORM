@@ -44,6 +44,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 logging.basicConfig(
@@ -79,19 +80,46 @@ WILDCARD_KEYS = {k for k in CACHE_KEYS if k.endswith(":*")}
 EXACT_KEYS    = [k for k in CACHE_KEYS if not k.endswith(":*")]
 
 
+class _RejectCacheBustRedirect(urllib.request.HTTPRedirectHandler):
+    """Never forward the privileged admin-secret header to any redirect."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_ALLOWED_CACHE_PATHS = frozenset({
+    "/api/admin/cache/bust", "/api/admin/cache/bust-prefix",
+})
+
+
 def _make_request(url: str, secret: str, method: str = "POST") -> int:
-    """Send an HTTP request. Returns status code or 0 on error."""
+    """POST only to the pinned production HTTPS cache endpoints; no redirects.
+
+    Any malformed target, host spoofing, unexpected method, or redirect
+    fails closed without publishing the admin secret or blocking the
+    intelligence publisher. A genuine non-200 HTTP status is still reported
+    unchanged to preserve the existing best-effort cache-bust contract.
+    """
     try:
+        target = urllib.parse.urlsplit(url)
+        if (not secret or method != "POST" or target.scheme != "https"
+                or target.netloc != "intel.cyberdudebivash.com"
+                or target.path not in _ALLOWED_CACHE_PATHS
+                or target.fragment):
+            log.warning("Cache-bust destination policy rejected")
+            return 0
         req = urllib.request.Request(
-            url, method=method,
+            url, method="POST",
             headers={"X-Admin-Secret": secret, "User-Agent": "SENTINEL-APEX-CACHE-BUST/143.0.0"},
         )
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        opener = urllib.request.build_opener(_RejectCacheBustRedirect)
+        with opener.open(req, timeout=12) as resp:
             return resp.status
     except urllib.error.HTTPError as e:
         return e.code
     except Exception as e:
-        log.debug("Request to %s failed: %s", url, e)
+        # A transport exception can embed request headers; never log it.
+        log.debug("Cache-bust transport failed: %s", type(e).__name__)
         return 0
 
 
