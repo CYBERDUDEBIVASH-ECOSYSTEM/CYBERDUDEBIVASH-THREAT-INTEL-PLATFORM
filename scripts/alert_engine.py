@@ -222,6 +222,15 @@ def _mark_sent(state: Dict, fingerprint: str, alert_type: str, summary: str) -> 
 # Telegram Transport
 # ---------------------------------------------------------------------------
 
+class _NoTelegramRedirect(urllib.request.HTTPRedirectHandler):
+    """Never forward a credential-bearing Telegram request through a redirect."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Reject even HTTPS redirects: they could disclose /bot<TOKEN>/...
+        # on a different origin. urllib emits HTTPError for rejection.
+        return None
+
+
 def _tg_send(token: str, chat_id: str, text: str,
               parse_mode: str = "Markdown",
               max_retries: int = 2) -> bool:
@@ -238,6 +247,15 @@ def _tg_send(token: str, chat_id: str, text: str,
         text = text[:3990] + "\n...[truncated]"
 
     url = TG_API_BASE.format(token=token, method="sendMessage")
+    target = urllib.parse.urlsplit(url)
+    # The token is embedded in the URL path per Telegram's API contract.
+    # Pin TLS and the API origin; never permit an injected query or fragment.
+    if (target.scheme != "https" or target.hostname != "api.telegram.org"
+            or target.port not in (None, 443)
+            or target.username or target.password or target.query or target.fragment):
+        logger.error("Telegram endpoint origin policy rejected")
+        return False
+    opener = urllib.request.build_opener(_NoTelegramRedirect)
     payload = json.dumps({
         "chat_id": chat_id,
         "text": text,
@@ -252,7 +270,7 @@ def _tg_send(token: str, chat_id: str, text: str,
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with opener.open(req, timeout=15) as resp:
                 result = json.loads(resp.read())
                 if result.get("ok"):
                     logger.info("Telegram alert accepted: %d chars", len(text))
