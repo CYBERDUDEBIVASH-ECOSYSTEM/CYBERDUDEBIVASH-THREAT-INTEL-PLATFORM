@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import customer_ready_historical_selection as historical_selection  # noqa: E402
 from customer_ready_historical_selection import (  # noqa: E402
     ReportSelectionBlocked, select_authorized_historical_probes,
 )
@@ -135,6 +136,14 @@ def test_phase_five_uses_ready_only_cohort_and_requires_delivered_200(tmp_path, 
     path = tmp_path / "index.json"
     path.write_text(json.dumps(local), encoding="utf-8")
     monkeypatch.setattr(validator, "REPORTS_CATALOG_PATH", path)
+    # The synthetic November 22 catalog must be evaluated at its synthetic
+    # clock, not the real CI runner clock. Do not weaken production freshness.
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return CLOCK if tz is None else CLOCK.astimezone(tz)
+
+    monkeypatch.setattr(historical_selection, "datetime", FrozenDateTime)
     # Existing strict local chronology precheck is left in place.
     monkeypatch.setattr(validator, "_fetch_live_customer_ready_catalog", lambda: public)
     expected = selected(local, public)
