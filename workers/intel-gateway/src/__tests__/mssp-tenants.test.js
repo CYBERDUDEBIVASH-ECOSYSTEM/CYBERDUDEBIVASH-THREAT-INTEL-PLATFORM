@@ -479,3 +479,31 @@ test("docs: published MSSP tenant API matches the live routes", async () => {
     assert.equal((await hx.call(m, p, { key: V2_A })).status, 200, m + " " + p);
   }
 });
+
+
+test("signed generic JWT with forged MSSP tenant claims cannot bypass per-key grant enforcement", async () => {
+  const hx = h();
+  const ownerTenant = await createTenant(hx, V2_A, "Signed-claims-negative-control");
+  const nowSec = Math.floor(Date.now() / 1000);
+  // Intentionally signed with the test gateway secret: a valid signature
+  // and caller-controlled membership claims are not a key-level grant.
+  const signed = await craftJwt({
+    sub: "cust_v2_a",
+    tier: "MSSP",
+    iss: "SENTINEL-APEX",
+    iat: nowSec,
+    exp: nowSec + 600,
+    managed_tenants: [ownerTenant],
+    tenant_auth_version: 2,
+  });
+  const response = await hx.call(
+    "GET", `/api/mssp/tenants/${ownerTenant}/feed`, { bearer: signed },
+  );
+  assert.equal(response.status, 403);
+  assert.equal(response.body.error, "api_key_required");
+  assert.match(response.headers.get("Cache-Control") || "", /no-store/);
+  // The actual customer key remains valid with the same tenant.
+  assert.equal((await hx.call(
+    "GET", `/api/mssp/tenants/${ownerTenant}/feed`, { key: V2_A },
+  )).status, 200);
+});
