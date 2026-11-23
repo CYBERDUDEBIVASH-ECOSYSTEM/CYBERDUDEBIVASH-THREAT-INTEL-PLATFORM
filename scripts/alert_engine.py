@@ -255,10 +255,12 @@ def _tg_send(token: str, chat_id: str, text: str,
             with urllib.request.urlopen(req, timeout=15) as resp:
                 result = json.loads(resp.read())
                 if result.get("ok"):
-                    logger.info(f"Alert sent to {chat_id}: {len(text)} chars")
+                    logger.info("Telegram alert accepted: %d chars", len(text))
                     return True
                 else:
-                    logger.warning(f"TG API error: {result.get('description', result)}")
+                    # An upstream description could echo the bot-token URL.
+                    # Never log untrusted response text or customer chat IDs.
+                    logger.warning("Telegram API rejected alert without an OK acknowledgement")
         except urllib.error.HTTPError as e:
             if e.code == 429:  # Rate limited
                 retry_after = int(e.headers.get("Retry-After", 5))
@@ -267,7 +269,9 @@ def _tg_send(token: str, chat_id: str, text: str,
             else:
                 logger.error(f"TG HTTP {e.code} on attempt {attempt + 1}")
         except Exception as e:
-            logger.error(f"TG send error (attempt {attempt + 1}): {e}")
+            # urllib exceptions can contain the token-bearing request URL.
+            # Preserve the safe error class, never the untrusted message.
+            logger.error("TG send error (attempt %d): %s", attempt + 1, type(e).__name__)
         if attempt < max_retries - 1:
             time.sleep(2)
 
