@@ -222,6 +222,15 @@ def _mark_sent(state: Dict, fingerprint: str, alert_type: str, summary: str) -> 
 # Telegram Transport
 # ---------------------------------------------------------------------------
 
+class _NoTelegramRedirect(urllib.request.HTTPRedirectHandler):
+    """Never forward a credential-bearing Telegram request through a redirect."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Reject even HTTPS redirects: they could disclose /bot<TOKEN>/...
+        # on a different origin. urllib emits HTTPError for rejection.
+        return None
+
+
 def _tg_send(token: str, chat_id: str, text: str,
               parse_mode: str = "Markdown",
               max_retries: int = 2) -> bool:
@@ -238,6 +247,21 @@ def _tg_send(token: str, chat_id: str, text: str,
         text = text[:3990] + "\n...[truncated]"
 
     url = TG_API_BASE.format(token=token, method="sendMessage")
+    try:
+        target = urllib.parse.urlsplit(url)
+        # The token is embedded in the URL path per Telegram's API contract.
+        # Pin TLS and the API origin; never permit an injected query or fragment.
+        if (target.scheme != "https" or target.hostname != "api.telegram.org"
+                or target.port not in (None, 443)
+                or target.username or target.password or target.query or target.fragment):
+            logger.error("Telegram endpoint origin policy rejected")
+            return False
+        opener = urllib.request.build_opener(_NoTelegramRedirect)
+    except Exception as exc:
+        # Handler/proxy initialization may include the credential URL in an
+        # exception. Failure here must never crash the publisher or log secrets.
+        logger.error("Telegram transport initialization failed: %s", type(exc).__name__)
+        return False
     payload = json.dumps({
         "chat_id": chat_id,
         "text": text,
@@ -252,22 +276,32 @@ def _tg_send(token: str, chat_id: str, text: str,
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with opener.open(req, timeout=15) as resp:
                 result = json.loads(resp.read())
                 if result.get("ok"):
-                    logger.info(f"Alert sent to {chat_id}: {len(text)} chars")
+                    logger.info("Telegram alert accepted: %d chars", len(text))
                     return True
                 else:
-                    logger.warning(f"TG API error: {result.get('description', result)}")
+                    # An upstream description could echo the bot-token URL.
+                    # Never log untrusted response text or customer chat IDs.
+                    logger.warning("Telegram API rejected alert without an OK acknowledgement")
         except urllib.error.HTTPError as e:
             if e.code == 429:  # Rate limited
-                retry_after = int(e.headers.get("Retry-After", 5))
-                logger.warning(f"TG rate limited — sleeping {retry_after}s")
-                time.sleep(retry_after)
+                try:
+                    retry_after = int(e.headers.get("Retry-After", 5))
+                except (AttributeError, TypeError, ValueError):
+                    retry_after = 5
+                # Never let upstream input stall the publisher indefinitely.
+                retry_after = max(0, min(retry_after, 60))
+                logger.warning("Telegram rate limited; bounded retry-after=%ds", retry_after)
+                if attempt < max_retries - 1:
+                    time.sleep(retry_after)
             else:
                 logger.error(f"TG HTTP {e.code} on attempt {attempt + 1}")
         except Exception as e:
-            logger.error(f"TG send error (attempt {attempt + 1}): {e}")
+            # urllib exceptions can contain the token-bearing request URL.
+            # Preserve the safe error class, never the untrusted message.
+            logger.error("TG send error (attempt %d): %s", attempt + 1, type(e).__name__)
         if attempt < max_retries - 1:
             time.sleep(2)
 
