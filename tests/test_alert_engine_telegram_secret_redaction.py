@@ -4,6 +4,9 @@ from __future__ import annotations
 from io import BytesIO
 import json
 import logging
+from urllib.error import HTTPError
+
+import pytest
 
 from scripts import alert_engine
 
@@ -115,5 +118,32 @@ def test_transport_setup_failure_never_raises_or_leaks_credentials(monkeypatch, 
         assert alert_engine._tg_send(TOKEN, CHAT_ID, "synthetic", max_retries=1) is False
     emitted = _messages(caplog)
     assert "transport initialization failed: RuntimeError" in emitted
+    assert TOKEN not in emitted
+    assert CHAT_ID not in emitted
+
+
+@pytest.mark.parametrize(
+    ("raw_retry_after", "bounded"),
+    [("garbage", 5), ("864000", 60), ("-10", 0), (None, 5)],
+)
+def test_telegram_rate_limit_header_is_bounded_and_secret_safe(
+    monkeypatch, caplog, raw_retry_after, bounded
+):
+    """Malformed or abusive upstream cooldown must not throw or stall indefinitely."""
+    def rate_limited(request, *, timeout):
+        raise HTTPError(
+            request.full_url, 429, "rate limited",
+            {"Retry-After": raw_retry_after}, None,
+        )
+
+    _install_no_network_opener(monkeypatch, rate_limited)
+    sleeps = []
+    monkeypatch.setattr(alert_engine.time, "sleep", sleeps.append)
+    with caplog.at_level(logging.DEBUG, logger=alert_engine.logger.name):
+        assert alert_engine._tg_send(
+            TOKEN, CHAT_ID, "synthetic", max_retries=2
+        ) is False
+    assert sleeps == [bounded, 2]
+    emitted = _messages(caplog)
     assert TOKEN not in emitted
     assert CHAT_ID not in emitted
