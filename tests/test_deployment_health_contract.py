@@ -118,6 +118,7 @@ def test_B_valid_stale_503_is_operational_but_not_releasable():
 @pytest.mark.parametrize("reason,intel_status", [
     ("feed_unavailable", "unavailable"), ("invalid_feed_structure", "invalid"),
     ("no_intelligence_items", "fresh"), ("publication_count_mismatch", "fresh"),
+    ("invalid_intelligence_items", "fresh"),
     ("public_classification_unverified", "fresh"),
     ("generated_at_in_future", "future_timestamp"), ("generated_at_missing", "missing_timestamp"),
     ("generated_at_invalid", "invalid_timestamp"),
