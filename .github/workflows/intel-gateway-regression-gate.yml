@@ -319,6 +319,12 @@ jobs:
       - name: "P0 admin cache-bust redirect and secret boundary (offline)"
         run: python3 -m pytest -q --strict-markers tests/test_p0_cache_bust_redirect_controls.py
 
+      # P0: Protect disaster recovery against wrong-namespace/stale or
+      # tampered KV snapshots, bearer redirects and accidental live writes.
+      # Offline synthetic fixtures; NO R2/KV/Cloudflare operations.
+      - name: "P0 KV disaster-restore preflight and no-write negatives (offline)"
+        run: python3 -m pytest -q --strict-markers tests/test_p0_kv_restore_safety.py
+
       # P0 #819/#909: strict UTC chronology and manifest selection are release
       # blockers, not merely diagnostics. This explicit offline PR gate ensures
       # the new sanitized reason codes and the existing fail-closed controls
