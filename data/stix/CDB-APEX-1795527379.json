@@ -1,0 +1,412 @@
+{
+  "type": "bundle",
+  "id": "bundle--557aa02d-58eb-4a41-b4b0-b9210faa89ed",
+  "spec_version": "2.1",
+  "objects": [
+    {
+      "type": "identity",
+      "spec_version": "2.1",
+      "id": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "name": "CyberDudeBivash SENTINEL APEX",
+      "description": "CyberDudeBivash Pvt. Ltd. - Global Cybersecurity Intelligence Infrastructure",
+      "identity_class": "organization",
+      "sectors": [
+        "technology"
+      ],
+      "contact_information": "contact@cyberdudebivash.in",
+      "created": "2024-01-01T00:00:00Z",
+      "modified": "2024-01-01T00:00:00Z"
+    },
+    {
+      "type": "marking-definition",
+      "spec_version": "2.1",
+      "id": "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed",
+      "created": "2017-01-20T00:00:00.000Z",
+      "definition_type": "tlp",
+      "definition": {
+        "tlp": "red"
+      }
+    },
+    {
+      "type": "intrusion-set",
+      "spec_version": "2.1",
+      "id": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "name": "CDB-UNATTR-RAN Campaign",
+      "description": "Hackers Deploy ZQAgent Backdoor to Run Malicious Commands and Access Files on Linux Servers",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "confidence": 65,
+      "aliases": [
+        "CDB-UNATTR-RAN"
+      ],
+      "extensions": {
+        "x-cdb-apex-1": {
+          "predictive_score": 10.0,
+          "campaign_id": "CDB-CONTI",
+          "campaign_confidence": 10.0,
+          "threat_category": "Phishing",
+          "behavioral_tags": [
+            "network_c2"
+          ],
+          "ai_summary": "Initial access via phishing → execution chain: initial access → persistence → command and control → impact → malware behaviors: network c2",
+          "risk_factors": [
+            "IOC_density",
+            "MITRE_coverage",
+            "exploitation_context"
+          ],
+          "soc_priority": "P1",
+          "threat_level": "MEDIUM",
+          "recommended_action": "Risk 10.0/10 — 9 IOCs extracted",
+          "x_cdb_published_at": "2026-11-24T13:35:26Z",
+          "x_cdb_source_url": "https://cybersecuritynews.com/hackers-deploy-zqagent-backdoor/",
+          "x_cdb_source_name": "cybersecuritynews.com",
+          "x_cdb_retrieval_timestamp": "2026-11-24T13:36:16Z",
+          "x_cdb_publication_timestamp": "2026-11-24T13:35:26Z",
+          "x_cdb_content_hash": "ef44ace60fb66fc19c385ebcb0f5e0e49c80eeb76329feb5cf8ff3af0b3be005",
+          "x_cdb_content_hash_scope": "rss_entry_fields_sha256",
+          "x_cdb_evidence_count": 2,
+          "x_cdb_evidence_basis": [
+            "captured_rss_entry",
+            "separately_fetched_article"
+          ],
+          "x_cdb_article_content_hash": "0a01ca6a901b96a9e66ce24d0dd804fa8c5f705948c1d00fb72440ea67716b09",
+          "x_cdb_trust_score": 5.61
+        }
+      },
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--a3cc9e96-6ff5-43c1-b6ab-def43910b955",
+      "name": "Phishing",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1566",
+          "url": "https://attack.mitre.org/techniques/T1566/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--184eadc1-a7e0-46e9-bf23-cfed9f014d77",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--a3cc9e96-6ff5-43c1-b6ab-def43910b955",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--a42374bd-0bbd-4776-8413-abacce5d34ca",
+      "name": "Exploit Public-Facing Application",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1190",
+          "url": "https://attack.mitre.org/techniques/T1190/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--78c640d8-5e4d-4046-95a3-30745f149264",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--a42374bd-0bbd-4776-8413-abacce5d34ca",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--14ed125d-a88c-482c-abe2-12f394cf3efc",
+      "name": "Exploitation for Client Execution",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1203",
+          "url": "https://attack.mitre.org/techniques/T1203/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--a89ebfcd-e338-4cda-9d8f-fd95862b833c",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--14ed125d-a88c-482c-abe2-12f394cf3efc",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--a2c14896-8ea5-4d2e-ab85-bdf297362846",
+      "name": "Command and Scripting Interpreter",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1059",
+          "url": "https://attack.mitre.org/techniques/T1059/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--1c01a5f9-543f-4dcb-ac62-4c75409239f0",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--a2c14896-8ea5-4d2e-ab85-bdf297362846",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--fcfabcdc-ff71-49e5-8079-3c393a703ee6",
+      "name": "Boot or Logon Autostart Execution",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1547",
+          "url": "https://attack.mitre.org/techniques/T1547/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--2745acc7-2d1f-4ec7-9552-138e6e2216f6",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--fcfabcdc-ff71-49e5-8079-3c393a703ee6",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--62e54b0e-bbe2-44a0-ac94-6b31ad0c97f2",
+      "name": "Pre-OS Boot",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1542",
+          "url": "https://attack.mitre.org/techniques/T1542/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--be3dd046-e190-44be-9ee2-f641b01e4060",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--62e54b0e-bbe2-44a0-ac94-6b31ad0c97f2",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--46e5cd5c-f504-4a9d-a825-8b35b4037f33",
+      "name": "Multi-Factor Authentication Interception",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1111",
+          "url": "https://attack.mitre.org/techniques/T1111/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--24d84485-4975-457f-8bf3-a520989ddd67",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--46e5cd5c-f504-4a9d-a825-8b35b4037f33",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--82ae169e-f78b-43f3-955f-e2429ae96ff2",
+      "name": "Valid Accounts",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1078",
+          "url": "https://attack.mitre.org/techniques/T1078/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--9a16f4bb-c08d-4e10-bf46-72266b1a40b9",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--82ae169e-f78b-43f3-955f-e2429ae96ff2",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--6147afe7-ccd3-4588-844c-e8004f893aa8",
+      "name": "Data from Cloud Storage",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1530",
+          "url": "https://attack.mitre.org/techniques/T1530/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--34b6ee2a-ed9d-4a45-9062-b189c26577ed",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--6147afe7-ccd3-4588-844c-e8004f893aa8",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    },
+    {
+      "type": "attack-pattern",
+      "spec_version": "2.1",
+      "id": "attack-pattern--f5e55320-a1e7-4512-8957-f750182456a2",
+      "name": "Data Encrypted for Impact",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1486",
+          "url": "https://attack.mitre.org/techniques/T1486/"
+        }
+      ]
+    },
+    {
+      "type": "relationship",
+      "spec_version": "2.1",
+      "id": "relationship--89976a0a-28a2-4bdf-9fb8-864cb6404869",
+      "relationship_type": "uses",
+      "source_ref": "intrusion-set--babfc5d4-a8bb-40a9-b51f-31688774b0e4",
+      "target_ref": "attack-pattern--f5e55320-a1e7-4512-8957-f750182456a2",
+      "created": "2026-11-24T13:36:19Z",
+      "modified": "2026-11-24T13:36:19Z",
+      "object_marking_refs": [
+        "marking-definition--5e57c739-391a-4eb3-b6be-7d15ca92d5ed"
+      ],
+      "created_by_ref": "identity--61a8943b-b27b-5e19-afff-893bb2e2fa2b"
+    }
+  ]
+}
