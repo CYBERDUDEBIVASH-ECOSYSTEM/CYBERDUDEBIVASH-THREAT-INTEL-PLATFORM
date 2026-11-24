@@ -237,6 +237,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The fast publisher has independent deployment write permissions.
+      # Fail BEFORE building/publishing if any protected frontend asset has
+      # drifted from the tracked SHA-256 and size baseline.  This is the same
+      # fail-closed verifier as frontend-integrity-sync and does no writes.
+      - name: P0 fail-closed protected frontend integrity gate
+        run: python3 scripts/frontend_integrity.py verify
+
       - name: P0 R37 - Test permanent static feed denial
         run: python3 -m unittest discover -s tests -p 'test_p0_r37_static_feed_denial.py' -v
 
