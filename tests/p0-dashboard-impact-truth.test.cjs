@@ -45,3 +45,28 @@ test("financial impact fields remain plain strings, not serialized objects", () 
     assert.doesNotMatch(impact[key], /\[object Object\]/);
   }
 });
+
+test("canonical intel-- advisory ID is never double-prefixed or truncated", () => {
+  const id = "intel--767c4f31ea627c08786e5340";
+  const item = adapter.normalizeIntelItem({
+    id, title: "Synthetic vulnerable advisory",
+    severity: "CRITICAL", risk_score: 0.38, tlp: "TLP:CLEAR",
+    ttps: [], iocs: [], kev_present: false,
+  }, 0);
+  assert.equal(item.id, id);
+  assert.equal(item.stix_id, id); // legacy copy/reference property
+  assert.equal(item.stix_id_short, id); // do not lose the unique suffix
+  assert.ok(!item.stix_id.startsWith("intel--intel--"));
+});
+
+test("genuine STIX ID remains intact and internal ID is not silently prefixed", () => {
+  const id = "intel--abc123";
+  const stix = "indicator--aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const item = adapter.normalizeIntelItem({id, stix_id: stix, severity:"HIGH"}, 0);
+  assert.equal(item.id, id);
+  assert.equal(item.stix_id, stix);
+  assert.equal(item.stix_id_short, stix.substring(0, 16));
+  const noId = adapter.normalizeIntelItem({title:"Synthetic missing-ID fixture"}, 2);
+  assert.equal(noId.stix_id, "");
+  assert.equal(noId.stix_id_short, "ID unavailable");
+});
