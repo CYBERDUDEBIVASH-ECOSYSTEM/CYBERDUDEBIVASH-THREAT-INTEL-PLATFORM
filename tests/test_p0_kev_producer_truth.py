@@ -166,3 +166,18 @@ def test_dry_run_does_not_modify_feed(tmp_path, monkeypatch):
     assert kev.main() == 0
     assert feed.read_bytes() == baseline
     assert json.loads(report.read_text())["dry_run"] is True
+
+
+def test_malformed_row_fails_closed_before_any_feed_overwrite(tmp_path, monkeypatch):
+    feed = tmp_path / "feed.json"
+    report = tmp_path / "report.json"
+    # First record is a valid KEV hit; second corrupt record must block all writes.
+    feed.write_text(json.dumps({"items": [{"cve_ids": [CVE_B]}, None]}))
+    baseline = feed.read_bytes()
+    monkeypatch.setattr(kev, "FEED_PATH", feed)
+    monkeypatch.setattr(kev, "REPORT_PATH", report)
+    monkeypatch.setattr(kev, "_fetch_kev_catalog", catalog)
+    monkeypatch.setattr(kev, "DRY_RUN", False)
+    assert kev.main() == 1
+    assert feed.read_bytes() == baseline
+    assert not report.exists()
