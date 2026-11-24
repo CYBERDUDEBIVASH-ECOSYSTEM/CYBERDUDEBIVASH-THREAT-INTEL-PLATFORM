@@ -1087,7 +1087,7 @@ def _render_financial_impact(
         ("APEX composite risk", f"{float(risk or 0):.1f}/10"),
         ("CVSS base score", f"{_cvss:.1f}" if _cvss is not None else "Not assigned"),
         ("EPSS (30-day exploitation probability)", f"{_epss:.2f}%" if _epss is not None else "Not available"),
-        ("CISA KEV", "Listed — exploitation in the wild confirmed" if kev else "Not listed"),
+        ("CISA KEV", "Listed — exploitation in the wild confirmed" if kev else "Not verified in this record"),
         ("Exploit maturity", _h(_mat) if _mat else _NOT_ESTABLISHED),
         ("Threat class", _h(_class_label)),
         ("Sectors referenced", _h(", ".join(str(x) for x in sectors)) if sectors else "None tagged"),
@@ -1856,7 +1856,7 @@ def build_report_sections(item: dict) -> str:
         kev_txt = (
             "Active exploitation confirmed via CISA KEV catalogue - treat as IMMINENT threat."
             if kev else
-            "No confirmed active exploitation in CISA KEV catalogue at time of analysis."
+            "CISA KEV listing is not verified by this advisory record; no negative exploitation claim is established."
         )
         cvss_txt = f"CVSS base score: <strong>{_h(cvss)}</strong>" if cvss is not None else "CVSS score: <strong style='color:var(--muted)'>N/A</strong>"
         epss_txt = f"EPSS probability (30-day): <strong>{_h(epss)}%</strong>" if epss is not None else "EPSS: <strong style='color:var(--muted)'>N/A</strong>"
@@ -2065,7 +2065,7 @@ def build_report_sections(item: dict) -> str:
     # ── S8: CVSS / EPSS Deep Dive ──────────────────────────────────────────
     cvss_vec = item.get("cvss_vector") or "Not available"
     # pre-computed - no backslash inside f-string (Python <3.12 restriction)
-    _kev_chip = "<span class='sev-chip sev-CRITICAL'>YES &mdash; ACTIVELY EXPLOITED</span>" if kev else "No"
+    _kev_chip = "<span class='sev-chip sev-CRITICAL'>YES &mdash; ACTIVELY EXPLOITED</span>" if kev else "NOT VERIFIED — check each CVE against the current CISA catalog"
     sections.append(_section(8, "CVSS &amp; EPSS Deep Dive",
         "<div class='kv'>"
         f"<div class='kv-key'>CVSS Score (version not recorded)</div><div class='kv-val'><strong>" + (_h(str(cvss)) if cvss is not None else "<span style='color:var(--muted)'>N/A</span>") + "</strong></div>"
@@ -2401,7 +2401,7 @@ def build_report_sections(item: dict) -> str:
         f"<div class='kv-key'>APEX Risk Input</div><div class='kv-val'>{risk}/10</div>"
         f"<div class='kv-key'>CVSS</div><div class='kv-val'>{cvss if cvss is not None else 'N/A'}</div>"
         f"<div class='kv-key'>EPSS (30d %)</div><div class='kv-val'>{epss if epss is not None else 'N/A'}</div>"
-        f"<div class='kv-key'>KEV Status</div><div class='kv-val'>{'CONFIRMED' if kev else 'Not listed'}</div>"
+        f"<div class='kv-key'>KEV Status</div><div class='kv-val'>{'CONFIRMED' if kev else 'Not verified in this record'}</div>"
         f"<div class='kv-key'>IOC Observables / Validated</div><div class='kv-val'>{ioc_count} / {ioc_validated}</div>"
         f"<div class='kv-key'>TTP Coverage</div><div class='kv-val'>{len(ttps)} techniques</div>"
         f"</div>"
@@ -2477,7 +2477,7 @@ def render_report(item: dict, public_prefix: str) -> str:
     # P0 #721: same canonical KEV parser as build_report_sections (plain bool() read
     # legacy strings such as "NO"/"false" as KEV-confirmed -> header/body contradiction).
     _kev         = _kev_confirmed_check(item)
-    _kev_disp    = "YES &#x26A0;" if _kev else "No KEV listing found"
+    _kev_disp    = "YES &#x26A0;" if _kev else "Not verified in this record"
     _sevb_hdr    = _di.severity_basis(item, _cvss_resolved, _kev)
     if _sevb_hdr["rated"]:
         sev = _sevb_hdr["display"]
@@ -2621,7 +2621,7 @@ def render_report(item: dict, public_prefix: str) -> str:
   <div class='exec-tile {"crit" if _kev else "neutral"}'>
     <div class='exec-tile-label'>IOC obs. / valid. / KEV</div>
     <div class='exec-tile-val'>{len(_ioc_list)}<span style='font-size:12px;font-weight:400'> / {_ioc_validated_hdr}</span></div>
-    <div class='exec-tile-sub'>{"KEV CONFIRMED" if _kev else "No KEV entry"}</div>
+    <div class='exec-tile-sub'>{"KEV CONFIRMED" if _kev else "KEV status not verified"}</div>
   </div>
 </div>
 
