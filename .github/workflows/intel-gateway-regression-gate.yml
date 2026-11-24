@@ -141,10 +141,12 @@ jobs:
       # P0 dashboard customer-claim truth: run the REAL adapter tests on every
       # pull request and on main whenever adapter JS changes. Reuse this
       # existing runner; no paid CI service, network calls or deployments.
-      - name: "P0 customer advisory adapter evidence and type regressions (offline)"
+      - name: "P0 Pages full JS suite and customer advisory truth gate (offline)"
         run: |
           node --check js/api_adapter.js
-          node --test js/__tests__/api_adapter.evidence_truth.test.js js/__tests__/api_adapter.soc_priority.test.js tests/p0-dashboard-impact-truth.test.cjs
+          # Identical frontend suite invocation to pages-fast-publish.yml's
+          # pre-deploy gate. Catch ALL js/__tests__ regressions BEFORE merge.
+          node --test js/__tests__/*.test.js tests/p0-dashboard-impact-truth.test.cjs
 
       # Manual production release is NOT a push side effect: reject workflow
       # drift back to auto-deploy, default-env fallback or cancel-on-upload.
