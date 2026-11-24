@@ -73,3 +73,15 @@ def test_without_authoritative_rating_do_not_assign_patch_timeline():
     label, msg = gir._public_report_action_contract("CRITICAL", True, False, False)
     assert label == "TRIAGE REQUIRED"
     assert "no authoritative CVSS" in msg
+
+
+def test_unverified_kev_is_not_reported_as_authoritative_not_listed():
+    html = gir.render_report(advisory(
+        title="Two-CVE fictional news story CVE-2026-10001 and CVE-2026-10002",
+        kev=False, kev_present=False,
+    ), "https://intel.cyberdudebivash.com")
+    assert "KEV: <strong>Not verified in this record</strong>" in html
+    assert "KEV status not verified" in html
+    assert "NOT VERIFIED — check each CVE against the current CISA catalog" in html
+    assert "No KEV listing found" not in html
+    assert "No KEV entry" not in html
