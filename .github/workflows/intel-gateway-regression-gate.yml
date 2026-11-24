@@ -412,7 +412,7 @@ jobs:
       - name: "P0 AWS S3 HEAD 254/404 evidence classification (offline)"
         run: python3 -m pytest -q --strict-markers tests/test_p0_r2_head_254_is_not_missing.py
 
-      - name: "Python unit tests (self-contained suites)"
+      # P0 PR #1092: explicitly run digest tampering negative controls; the\n      # curated suite below does not automatically discover newly added tests.\n      - name: "P0 API manifest digest integrity regression (offline)"\n        run: python3 -m pytest -q --strict-markers tests/test_p0_api_manifest_digest_gate.py\n\n      - name: "Python unit tests (self-contained suites)"
         shell: bash
         run: |
           set -euo pipefail
