@@ -130,3 +130,40 @@ test("non-coercible JSON numeric fields cannot crash a customer advisory", () =>
   // Malformed entitlement flag stays fail-closed, never unlocked by parsing.
   assert.equal(item.ioc_paywall.locked, true);
 });
+
+
+test("P0 Pages gate regression: source-tag phishing category survives without exploitation claims", () => {
+  const raw = {
+    id: "intel--test-category-loss",
+    title: "Phishing URL report",
+    severity: "HIGH",
+    sla_priority: "P3",
+    tags: ["openphish", "phishing"],
+    threat_type: "Threat Intelligence",
+    apex_ai: { predictive_risk: 7.05, ai_confidence: 20, locked: true },
+  };
+  const item = Adapter.normalizeIntelItem(raw, 0);
+  assert.equal(item.impact_context.attack_type, "Phishing");
+  assert.match(item.ai_verdict, /Recorded advisory category: Phishing/);
+  assert.match(item.ai_verdict, /not verified attack activity/);
+  assert.doesNotMatch(item.ai_verdict, /Confirmed active exploitation|incident confirmed|malicious activity detected/i);
+});
+
+test("P0 Pages fallback never invents categories from arbitrary source strings", () => {
+  const malicious = Adapter.buildAiVerdict("", "CRITICAL", "P1", "<script>alert(1)</script>", 25);
+  assert.doesNotMatch(malicious, /<script>|alert\(1\)/);
+  assert.doesNotMatch(malicious, /Recorded advisory category/);
+
+  const generic = Adapter.buildAiVerdict("", "LOW", "P4", "Threat Intelligence", 0);
+  assert.doesNotMatch(generic, /Recorded advisory category/);
+  assert.match(generic, /No source-grounded per-advisory AI narrative/);
+});
+
+test("P0 Pages exact paywall marker and source AI analysis stay invariant with category", () => {
+  const teaser = "Paid analysis excerpt [Full AI analysis requires Pro]";
+  assert.equal(Adapter.buildAiVerdict(teaser, "HIGH", "P3", "Phishing", 10), teaser);
+  const source = "Analyst source summary.";
+  const value = Adapter.buildAiVerdict(source, "HIGH", "P3", "Phishing", 10);
+  assert.ok(value.startsWith(source));
+  assert.doesNotMatch(value, /Recorded advisory category: Phishing/);
+});
