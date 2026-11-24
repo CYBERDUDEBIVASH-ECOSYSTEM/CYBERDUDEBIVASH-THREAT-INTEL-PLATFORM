@@ -266,7 +266,7 @@ $Base = "https://intel.cyberdudebivash.com/api"
     </script>
 
     <h2 id="authentication">Authentication</h2>
-    <p>All authenticated endpoints require an API key passed in the <code>X-API-Key</code> header. Request your API key at <a href="/pricing.html" style="color:#4fc3f7">pricing.html</a>.</p>
+    <p>For authenticated API-key routes, pass your key in the <code>X-API-Key</code> header. Routes that document Bearer-session authentication use the documented session flow. Access remains subject to the endpoint-specific subscription and authorization requirements. Request your API key at <a href="/pricing.html" style="color:#4fc3f7">pricing.html</a>.</p>
     <pre>curl -H "X-API-Key: YOUR_API_KEY" \
   https://intel.cyberdudebivash.com/api/feed</pre>
     <div class="info-box warn">
@@ -277,9 +277,9 @@ $Base = "https://intel.cyberdudebivash.com/api"
     <table>
       <tr><th>Tier</th><th>Requests / Day</th><th>Burst (per minute)</th><th>Endpoints</th><th>Response on Exceed</th></tr>
       <tr><td>Free <span class="tier-badge tier-free">FREE</span></td><td>50</td><td>30</td><td>Public endpoints only</td><td>HTTP 429</td></tr>
-      <tr><td>Professional <span class="tier-badge tier-pro">PRO</span></td><td>5,000</td><td>120</td><td>All endpoints</td><td>HTTP 429</td></tr>
-      <tr><td>Enterprise <span class="tier-badge tier-ent">ENT</span></td><td>50,000</td><td>600</td><td>All endpoints + SIEM</td><td>HTTP 429</td></tr>
-      <tr><td>MSSP <span class="tier-badge tier-mssp">MSSP</span></td><td>50,000</td><td>1,200</td><td>All + Multi-tenant</td><td>HTTP 429</td></tr>
+      <tr><td>Professional <span class="tier-badge tier-pro">PRO</span></td><td>5,000</td><td>120</td><td>Public and PRO-eligible endpoints; Enterprise and MSSP restrictions apply</td><td>HTTP 429</td></tr>
+      <tr><td>Enterprise <span class="tier-badge tier-ent">ENT</span></td><td>50,000</td><td>600</td><td>Public, PRO and Enterprise-eligible endpoints, including SIEM; MSSP-only routes excluded</td><td>HTTP 429</td></tr>
+      <tr><td>MSSP <span class="tier-badge tier-mssp">MSSP</span></td><td>50,000</td><td>1,200</td><td>Tier-eligible endpoints, including MSSP multi-tenant routes; tenant and role authorization apply</td><td>HTTP 429</td></tr>
     </table>
     <p>When a limit is exceeded the gateway answers HTTP 429 with <code>Retry-After</code>, <code>X-RateLimit-Limit</code>, <code>X-RateLimit-Remaining</code> and <code>X-RateLimit-Reset</code> (end of the 60-second window, epoch seconds). Daily-quota denials carry <code>X-DailyLimit-*</code> headers instead. Successful responses do not carry rate-limit headers.</p>
 
