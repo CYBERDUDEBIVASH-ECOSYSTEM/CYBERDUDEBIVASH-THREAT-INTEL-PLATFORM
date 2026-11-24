@@ -8,7 +8,8 @@ P0-FIX v184.0:
   - write-back triggers on deflated>0 as well as marked>0
 """
 from __future__ import annotations
-import json, logging, os, re, sys, urllib.request, urllib.error
+import http.client
+import json, logging, os, re, sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,18 +27,60 @@ TIMEOUT     = int(os.environ.get("KEV_TIMEOUT", "20"))
 _CVE_RE     = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
 
 
+_CISA_KEV_HOST = "www.cisa.gov"
+_CISA_KEV_PATH = "/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+_MAX_CISA_KEV_BYTES = 16 * 1024 * 1024
+
+
 def _fetch_kev_catalog() -> dict:
+    """Read the official catalog only over verified HTTPS, never a redirect.
+
+    A fixed origin/path prevents URL substitution and unintended redirects.
+    The bounded response protects publisher memory from oversized payloads.
+    Failure leaves the existing catalog-unavailable behavior intact.
+    """
     log.info("Fetching CISA KEV catalog from %s", KEV_URL)
-    try:
-        req = urllib.request.Request(KEV_URL, headers={"User-Agent": "SentinelApex/175.1"})
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            data = json.loads(resp.read())
-    except Exception as e:
-        log.error("KEV fetch failed: %s", e)
+    if KEV_URL != f"https://{_CISA_KEV_HOST}{_CISA_KEV_PATH}":
+        log.error("Rejected unapproved CISA KEV source URL")
         return {}
+
+    connection = None
+    try:
+        # http.client.HTTPSConnection validates the server certificate by default.
+        # No generic file:/ftp: handlers or automatic cross-origin redirects.
+        connection = http.client.HTTPSConnection(
+            _CISA_KEV_HOST, port=443, timeout=TIMEOUT
+        )
+        connection.request(
+            "GET", _CISA_KEV_PATH,
+            headers={"User-Agent": "SentinelApex/175.1", "Accept": "application/json"},
+        )
+        response = connection.getresponse()
+        if response.status != 200:
+            raise ValueError(f"unexpected CISA KEV HTTP status: {response.status}")
+        raw = response.read(_MAX_CISA_KEV_BYTES + 1)
+        if len(raw) > _MAX_CISA_KEV_BYTES:
+            raise ValueError("CISA KEV response exceeds bounded size")
+        data = json.loads(raw.decode("utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("vulnerabilities"), list):
+            raise ValueError("CISA KEV response has invalid catalog structure")
+    except Exception as exc:
+        log.error("KEV fetch failed: %s", exc)
+        return {}
+    finally:
+        if connection is not None:
+            connection.close()
+
     catalog = {}
-    for v in (data.get("vulnerabilities") or []):
-        cid = (v.get("cveID") or "").upper().strip()
+    for v in data["vulnerabilities"]:
+        if not isinstance(v, dict):
+            log.error("CISA KEV catalog contains a non-object vulnerability")
+            return {}
+        cid = v.get("cveID") or ""
+        if not isinstance(cid, str):
+            log.error("CISA KEV catalog contains a non-string CVE ID")
+            return {}
+        cid = cid.upper().strip()
         if cid:
             catalog[cid] = {
                 "date_added":         v.get("dateAdded", ""),
