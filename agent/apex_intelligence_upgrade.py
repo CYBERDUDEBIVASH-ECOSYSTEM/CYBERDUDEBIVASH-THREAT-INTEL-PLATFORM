@@ -1810,109 +1810,113 @@ def generate_ai_insight_premium(item: Dict[str, Any]) -> str:
         ai_conf = round(ai_conf, 1)
         is_cve = bool(re.search(r'CVE-\d{4}-\d+', title))
 
-        # Predictive risk horizon (14-day model)
-        pred_risk = min(10.0, risk + (1.5 if kev else 0.3))
+        # P0 customer-truth contract: a heuristic score is not an exploit
+        # probability or a clock.  Preserve the observed score without
+        # inventing a 14-day forecast, an attacker, a sector, or an incident.
+        pred_risk = max(0.0, min(10.0, risk))
 
-        # Escalation prediction. v186.0 P0 FIX: escalation_detail used to be one fixed
-        # sentence per risk bucket, so any two items landing in the same bucket (common
-        # for the many similarly-scored low-severity CVE stubs a single feed run
-        # produces) rendered byte-for-byte identical AI Insight text. When a real EPSS
-        # score is available it's interpolated directly (never fabricated); otherwise
-        # a small set of honestly-worded variants is selected deterministically by the
-        # item's own id/title, mirroring the same seed_hash mechanism already used for
-        # exec-summary template selection elsewhere in this module.
+        # EPSS is a 30-day probability for the specified CVE, not proof of an
+        # exploit or customer exposure.  Missing/invalid stays unassessed.
         try:
-            epss_pct = float(epss)  # already a percentage (_epss_percent)
-        except (TypeError, ValueError):
+            epss_pct = float(epss)
+            if not 0.0 <= epss_pct <= 100.0:
+                epss_pct = None
+        except (TypeError, ValueError, OverflowError):
             epss_pct = None
 
-        if kev or risk >= 9:
-            escalation = "IMMINENT (24–72 hours)"
-            _variants = (
-                "Active exploitation confirmed or near-certain. Emergency response warranted.",
-                "Exploitation signals leave no meaningful remediation window remaining. Treat as an active incident, not a patch backlog item.",
-            )
-        elif risk >= 7:
-            escalation = "LIKELY (72 hours – 7 days)"
-            _variants = (
-                "High exploitation probability within the week. Prioritised patching required.",
-                "Weaponisation within days is plausible given the severity profile. Escalate above routine patch SLAs.",
-            )
-        elif risk >= 5:
-            escalation = "POSSIBLE (7–30 days)"
-            _variants = (
-                "Moderate exploitation probability. Monitor threat intel feeds for PoC emergence.",
-                "Exploitation is plausible but not imminent. Track exploit-database and vendor-advisory updates over the coming weeks.",
-            )
-        else:
-            escalation = "LOW (30+ days)"
-            _variants = (
-                "Limited exploitation probability. Address in standard patching cycle.",
-                "No signals indicate near-term targeting. Standard vulnerability-management cadence is appropriate.",
-                "Current evidence does not support an accelerated timeline. Revisit if KEV or EPSS status changes.",
-            )
-
-        if epss_pct is not None:
-            if epss_pct >= 10.0:
-                epss_read = "an elevated"
-            elif epss_pct >= 1.0:
-                epss_read = "a modest"
-            else:
-                epss_read = "a low"
+        if kev:
+            escalation = "CISA KEV LISTED"
             escalation_detail = (
-                f"FIRST.org EPSS models {epss_read} 30-day exploitation probability of "
-                f"{epss_pct:.2f}% for this specific advisory. " + _variants[0]
+                "CISA KEV catalog evidence identifies exploitation in the wild. "
+                "That does not establish compromise of any customer environment. "
+                "Verify affected versions and current vendor remediation guidance."
+            )
+        elif is_cve and severity in ("CRITICAL", "HIGH"):
+            escalation = "PRIORITY EXPOSURE REVIEW"
+            escalation_detail = (
+                "Source-reported vulnerability severity warrants timely exposure "
+                "and patch assessment. No exploit window or active exploitation "
+                "timeline is established by this heuristic. Validate vendor "
+                "preconditions, CISA KEV status and available mitigations."
+            )
+        elif is_cve:
+            escalation = "ASSESS VULNERABILITY EXPOSURE"
+            escalation_detail = (
+                "Validate the affected product and version against owned assets. "
+                "No exploitation timing or absence of targeting is established."
             )
         else:
-            escalation_detail = _variants[seed_hash % len(_variants)]
+            escalation = "ASSESS SOURCE AND RELEVANCE"
+            escalation_detail = (
+                "Determine whether the source-reported threat applies to owned "
+                "assets or identities before escalating incident response."
+            )
 
-        # Sector risk forecasting
-        sector_risks = []
+        if epss_pct is not None and is_cve:
+            escalation_detail += (
+                f" FIRST.org EPSS reports a {epss_pct:.3f}% probability of "
+                "exploitation in the next 30 days for the associated CVE; "
+                "this is not a prediction of customer compromise."
+            )
+        elif is_cve:
+            escalation_detail += " A verified EPSS probability is not available."
+
+        # Customer-sector exposure cannot be rated from a vulnerability class
+        # alone.  These are questions, not observed targeting or forecasts.
         if vuln_class == "remote_code_execution":
-            sector_risks = ["Financial Services (HIGH)", "Healthcare (HIGH)", "Technology (MEDIUM-HIGH)"]
+            sector_risks = [
+                "Are affected services internet-facing or reachable by untrusted users?",
+                "Which owned products and versions are vulnerable?",
+            ]
         elif vuln_class == "denial_of_service":
-            sector_risks = ["Financial Services (HIGH)", "E-Commerce (HIGH)", "Healthcare (MEDIUM)"]
+            sector_risks = [
+                "Which affected services have availability or continuity requirements?",
+                "Are vendor fixes or rate-limiting mitigations applicable?",
+            ]
         elif vuln_class == "sql_injection":
-            sector_risks = ["Retail & E-Commerce (HIGH)", "Healthcare (HIGH)", "Government (MEDIUM)"]
-        elif vuln_class in ("ransomware", "infostealer"):
-            sector_risks = ["Healthcare (CRITICAL)", "Education (HIGH)", "Government (HIGH)"]
+            sector_risks = [
+                "Are affected application endpoints reachable by untrusted users?",
+                "What database permissions and data access controls limit impact?",
+            ]
         else:
-            sector_risks = ["All sectors with unpatched exposure (MEDIUM)"]
+            sector_risks = [
+                "Is the affected product present in the customer asset inventory?",
+                "Are exposed versions and vendor mitigations independently verified?",
+            ]
 
-        # Next-step prediction
         if is_cve:
+            next_steps = [
+                "Identify the CVE and affected versions using the primary vendor/CNA advisory.",
+                "Compare affected versions with owned assets, reachability and compensating controls.",
+                "Check CISA KEV, dated EPSS data and source-supported exploitation indicators; "
+                "do not infer activity from absent IOC evidence.",
+            ]
             if kev:
-                next_steps = [
-                    "Active exploitation toolkits incorporating this CVE are likely available on underground markets",
-                    "Ransomware affiliates may chain this vulnerability with credential theft for double-extortion campaigns",
-                    "Expect exploitation volume to increase 3–5× over the next 7 days based on KEV historical patterns",
-                ]
-            else:
-                next_steps = [
-                    "Public PoC emergence within 14 days of disclosure is statistically likely for this vulnerability class",
-                    "Automated scanner clusters will probe for vulnerable instances within 24 hours of any PoC release",
-                    f"{'High-severity CVEs in this category typically achieve KEV listing within 30 days of PoC release.' if risk >= 7 else 'Monitor CISA KEV and exploit database feeds for exploitation evidence.'}",
-                ]
+                next_steps.append(
+                    "Prioritise verified exposed assets using vendor guidance and the CISA KEV "
+                    "entry; investigate customer compromise only when telemetry supports it."
+                )
         else:
             next_steps = [
-                "Infrastructure reuse patterns suggest this actor cluster will rotate to adjacent targets in the same sector",
-                "TTP similarity scoring indicates correlation with 3–5 prior campaigns in APEX's historical database",
-                "Proactive threat hunting across IOC and behavioural indicators recommended over next 30 days",
+                "Verify the original source and whether the reported activity is relevant to your environment.",
+                "Hunt only validated, source-supported indicators and behaviours where available.",
+                "Document observed evidence, uncertainty and remediation ownership.",
             ]
 
         # TTP evolution prediction
         tactic_names = list(set(
-            (t.get("tactic") or resolve_technique(t if isinstance(t, str) else t.get("id", "")).get("tactic", ""))
-            for t in ttps[:5] if t
+            ((t.get("tactic") if isinstance(t, dict) else "") or
+             resolve_technique(t if isinstance(t, str) else t.get("id", "")).get("tactic", ""))
+            for t in ttps[:5] if isinstance(t, (str, dict)) and t
         ))
         tactic_names = [t for t in tactic_names if t]
 
         html = (
             f"<div class='apex-ai-insight'>"
             f"<div class='apex-intel-grid'>"
-            f"<div class='apex-intel-item'><span class='apex-label'>Scenario Risk Index (not a forecast)</span>"
+            f"<div class='apex-intel-item'><span class='apex-label'>APEX composite risk (not a forecast)</span>"
             f"<span class='apex-value'><strong>{pred_risk:.1f}/10</strong></span></div>"
-            f"<div class='apex-intel-item'><span class='apex-label'>Escalation Triage (scenario)</span>"
+            f"<div class='apex-intel-item'><span class='apex-label'>Evidence-led triage (no timeline forecast)</span>"
             f"<span class='apex-value'><strong>{escalation}</strong></span></div>"
             f"<div class='apex-intel-item'><span class='apex-label'>Attribution label (not verified here)</span>"
             f"<span class='apex-value'><code>{actor or 'APEX-CLUSTER-UNATTRIBUTED'}</code></span></div>"
