@@ -43,7 +43,19 @@ function contractErrors(document) {
   if (python.includes('/feed/sigma') || powershell.includes('/feed/sigma')) {
     errors.push('quick start uses legacy Sigma route');
   }
-  if (!document.includes('GET /api/v1/export/sigma')) errors.push('paid Sigma route not documented');
+  if (!python.includes('GET /api/sigma/bulk') || !powershell.includes('GET /api/sigma/bulk')) errors.push('paid Sigma route not documented in both quick starts');
+  if (document.includes('/api/v1/export/sigma')) errors.push('unsupported Sigma route documented');
+  const sigmaStart = document.indexOf('<h2 id="export-sigma">');
+  const sigmaEnd = document.indexOf('<h2 id="export-yara">', sigmaStart);
+  const sigma = sigmaStart >= 0 && sigmaEnd > sigmaStart ? document.slice(sigmaStart, sigmaEnd) : '';
+  if (!sigma.includes('<strong>/api/sigma/bulk</strong>') ||
+      !sigma.includes('/api/sigma/bulk?format=yaml') ||
+      !sigma.includes('<td>ndjson</td>') ||
+      !sigma.includes('<td>severity</td>') ||
+      sigma.includes('<td>limit</td>') ||
+      !sigma.includes('up to 50 rules for PRO or up to 2,000 for Enterprise and MSSP')) {
+    errors.push('Sigma export contract mismatch');
+  }
   return errors;
 }
 
@@ -91,5 +103,23 @@ test('authentication gate rejects universal key claims, missing authorization bo
     const mutated = html.replace(before, after);
     assert.notEqual(mutated, html, 'negative control must mutate the document');
     assert.ok(authenticationErrors(mutated).length > 0, before);
+  }
+});
+
+test('Sigma documentation rejects nonexistent route, unsupported limit and incorrect format defaults', () => {
+  const start = html.indexOf('<h2 id="export-sigma">');
+  const end = html.indexOf('<h2 id="export-yara">', start);
+  assert.ok(start >= 0 && end > start, 'missing Sigma documentation section');
+  const section = html.slice(start, end);
+  for (const [before, after] of [
+    ['<strong>/api/sigma/bulk</strong>', '<strong>/api/v1/export/sigma</strong>'],
+    ['<td>severity</td>', '<td>limit</td>'],
+    ['<td>ndjson</td>', '<td>yaml</td>'],
+    ['up to 50 rules for PRO or up to 2,000 for Enterprise and MSSP', 'unlimited rules'],
+  ]) {
+    assert.ok(section.includes(before), 'negative control must target Sigma: ' + before);
+    const mutated = html.slice(0, start) + section.replace(before, after) + html.slice(end);
+    assert.notEqual(mutated, html, 'negative control must mutate the document');
+    assert.ok(contractErrors(mutated).length > 0, before);
   }
 });
