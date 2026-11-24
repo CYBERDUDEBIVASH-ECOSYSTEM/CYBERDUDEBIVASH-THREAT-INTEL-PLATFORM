@@ -1087,7 +1087,7 @@ def _render_financial_impact(
         ("APEX composite risk", f"{float(risk or 0):.1f}/10"),
         ("CVSS base score", f"{_cvss:.1f}" if _cvss is not None else "Not assigned"),
         ("EPSS (30-day exploitation probability)", f"{_epss:.2f}%" if _epss is not None else "Not available"),
-        ("CISA KEV", "Listed — exploitation in the wild confirmed" if kev else "Not listed"),
+        ("CISA KEV", "Listed — exploitation in the wild confirmed" if kev else "Not verified in this record"),
         ("Exploit maturity", _h(_mat) if _mat else _NOT_ESTABLISHED),
         ("Threat class", _h(_class_label)),
         ("Sectors referenced", _h(", ".join(str(x) for x in sectors)) if sectors else "None tagged"),
@@ -1511,6 +1511,72 @@ def _mask_item_for_public_report(item: dict) -> dict:
     return masked
 
 
+def _public_report_action_contract(severity: str, has_cve: bool,
+                                   kev: bool, prioritized: bool) -> tuple[str, str]:
+    """One evidence-bounded public action for BOTH the banner and CISO summary.
+
+    Severity comes from dossier_integrity.severity_basis (not the APEX
+    composite).  CVSS alone does not prove exploitation, customer exposure
+    or a universal patch deadline; CISA KEV documents in-the-wild exploitation
+    but not a compromise of the reader's environment.
+    """
+    sev = str(severity or "UNKNOWN").upper()
+    if not prioritized:
+        return (
+            "TRIAGE REQUIRED",
+            "TRIAGE REQUIRED — no authoritative CVSS severity or confirmed CISA "
+            "KEV evidence establishes an action priority; verify the vendor "
+            "advisory and customer asset exposure before assigning an SLA.",
+        )
+    if has_cve:
+        if kev:
+            return (
+                "PATCH IMMEDIATELY",
+                "PATCH IMMEDIATELY — CISA KEV listing confirmed. Verify affected "
+                "versions, exposure and vendor remediation; prioritize the "
+                "customer's emergency change process. Customer compromise is "
+                "not established by this advisory.",
+            )
+        if sev == "CRITICAL":
+            return (
+                "URGENT PATCH ASSESSMENT",
+                "URGENT PATCH ASSESSMENT — Critical source-reported severity. "
+                "Determine affected versions and reachable assets promptly; "
+                "apply vendor remediation according to verified exposure and "
+                "organizational policy. Exploitation timing is not established.",
+            )
+        if sev == "HIGH":
+            return (
+                "HIGH PRIORITY",
+                "HIGH PRIORITY — assess affected versions and exposure, then "
+                "schedule the vendor fix according to the customer's validated "
+                "risk and change policy; no universal patch deadline asserted.",
+            )
+        if sev == "MEDIUM":
+            return (
+                "PATCH STANDARD",
+                "PATCH STANDARD — verify applicable versions and apply the "
+                "vendor fix in the approved vulnerability-management cycle.",
+            )
+        return (
+            "MONITOR",
+            "MONITOR — verify vendor guidance and asset exposure; update "
+            "the remediation plan as evidence changes.",
+        )
+    if sev in ("CRITICAL", "HIGH"):
+        return (
+            "URGENT REVIEW",
+            "URGENT REVIEW — verify whether the reported activity applies to "
+            "owned assets, identities or logs. Escalate incident response "
+            "only where validated evidence warrants it.",
+        )
+    return (
+        "MONITOR",
+        "MONITOR — validate relevance against customer assets and "
+        "source-supported evidence; no vulnerability patch claim applies.",
+    )
+
+
 def build_report_sections(item: dict) -> str:
     # RENDER LAYER SAFETY: NEVER assume data types  -  all fields coerced before use
     title       = str(item.get("title") or "Untitled Advisory")
@@ -1683,18 +1749,8 @@ def build_report_sections(item: dict) -> str:
     # intel--f43ac4fcc6f30452 (an OpenPhish phishing-URL item). Gate the
     # patch language on the item actually being a CVE/vulnerability record.
     _has_cve = bool(item.get("cve_id")) or bool(re.search(r"CVE-\d{4}-\d+", f"{title} {desc}", re.IGNORECASE))
-    _exec_action = (
-        "IMMEDIATE PATCH REQUIRED — Active exploitation confirmed. Deploy emergency change advisory." if (kev and _has_cve) else
-        "HIGH PRIORITY — Actively exploited vulnerability. Accelerate patching timeline." if (_has_cve and any(
-            w in title.lower() for w in ["actively exploit", "exploit in the wild", "under active exploit"]
-        )) else
-        "PATCH WITHIN 7 DAYS — High-severity advisory with significant exploitation probability." if (_has_cve and sev == "CRITICAL") else
-        "PATCH WITHIN 14 DAYS — Prioritise remediation in next maintenance window." if (_has_cve and sev == "HIGH") else
-        "STANDARD PATCH CYCLE — Include in next scheduled patching window." if (_has_cve and sev == "MEDIUM") else
-        "INFORMATIONAL — Monitor; apply patch in routine cycle." if _has_cve else
-        # Non-vulnerability record: no patch exists, so no patch directive is shown.
-        "URGENT REVIEW — Validate relevance to your environment and escalate per incident response process." if sev in ("CRITICAL", "HIGH") else
-        "MONITOR — Validate relevance to your environment; no vulnerability-specific action applies."
+    _urgency_txt, _exec_action = _public_report_action_contract(
+        sev, _has_cve, kev, _sevb["prioritized"]
     )
     # RX-PR1: these were specific-looking dollar figures derived from severity
     # alone, framed as if customer-specific ("Standard Enterprise rate")
@@ -1720,17 +1776,13 @@ def build_report_sections(item: dict) -> str:
     # NameError on every report render → 33 write failures → Stage 5.5 HARD FAIL.
     # Same RX-PR1 rule as _exec_action above: patch wording only when there
     # is something to patch (a ransomware campaign has no patch).
-    _urgency_txt = ("PATCH IMMEDIATELY" if (sev == "CRITICAL" and _has_cve) else
-                    "RESPOND IMMEDIATELY" if sev == "CRITICAL" else
-                    "HIGH PRIORITY"    if sev == "HIGH"     else
-                    "PATCH STANDARD"   if (sev == "MEDIUM" and _has_cve) else
-                    "STANDARD PRIORITY" if sev == "MEDIUM" else "MONITOR")
+    # Action/urgency label comes from one shared policy (same as banner).
     if not _sevb["prioritized"]:
         _conds = _di.source_stated_conditions(item)
         _exec_action = (
-            "PRIORITY NOT DETERMINED &mdash; no authoritative CVSS score or CISA KEV listing is available. "
-            "Triage against the vendor advisory now"
-            + (f"; the source states: &ldquo;{_h('; '.join(_conds))}&rdquo;" if _conds else "")
+            "TRIAGE REQUIRED &mdash; priority not determined from authoritative CVSS "
+            "or CISA KEV evidence. Triage against the vendor advisory"
+            + (f"; source-stated conditions: &ldquo;{_h('; '.join(_conds))}&rdquo;" if _conds else "")
             + ". CUSTOMER EXPOSURE: UNKNOWN."
         )
         _urgency_txt = "TRIAGE REQUIRED"
@@ -1804,7 +1856,7 @@ def build_report_sections(item: dict) -> str:
         kev_txt = (
             "Active exploitation confirmed via CISA KEV catalogue - treat as IMMINENT threat."
             if kev else
-            "No confirmed active exploitation in CISA KEV catalogue at time of analysis."
+            "CISA KEV listing is not verified by this advisory record; no negative exploitation claim is established."
         )
         cvss_txt = f"CVSS base score: <strong>{_h(cvss)}</strong>" if cvss is not None else "CVSS score: <strong style='color:var(--muted)'>N/A</strong>"
         epss_txt = f"EPSS probability (30-day): <strong>{_h(epss)}%</strong>" if epss is not None else "EPSS: <strong style='color:var(--muted)'>N/A</strong>"
@@ -2013,7 +2065,7 @@ def build_report_sections(item: dict) -> str:
     # ── S8: CVSS / EPSS Deep Dive ──────────────────────────────────────────
     cvss_vec = item.get("cvss_vector") or "Not available"
     # pre-computed - no backslash inside f-string (Python <3.12 restriction)
-    _kev_chip = "<span class='sev-chip sev-CRITICAL'>YES &mdash; ACTIVELY EXPLOITED</span>" if kev else "No"
+    _kev_chip = "<span class='sev-chip sev-CRITICAL'>YES &mdash; ACTIVELY EXPLOITED</span>" if kev else "NOT VERIFIED — check each CVE against the current CISA catalog"
     sections.append(_section(8, "CVSS &amp; EPSS Deep Dive",
         "<div class='kv'>"
         f"<div class='kv-key'>CVSS Score (version not recorded)</div><div class='kv-val'><strong>" + (_h(str(cvss)) if cvss is not None else "<span style='color:var(--muted)'>N/A</span>") + "</strong></div>"
@@ -2349,7 +2401,7 @@ def build_report_sections(item: dict) -> str:
         f"<div class='kv-key'>APEX Risk Input</div><div class='kv-val'>{risk}/10</div>"
         f"<div class='kv-key'>CVSS</div><div class='kv-val'>{cvss if cvss is not None else 'N/A'}</div>"
         f"<div class='kv-key'>EPSS (30d %)</div><div class='kv-val'>{epss if epss is not None else 'N/A'}</div>"
-        f"<div class='kv-key'>KEV Status</div><div class='kv-val'>{'CONFIRMED' if kev else 'Not listed'}</div>"
+        f"<div class='kv-key'>KEV Status</div><div class='kv-val'>{'CONFIRMED' if kev else 'Not verified in this record'}</div>"
         f"<div class='kv-key'>IOC Observables / Validated</div><div class='kv-val'>{ioc_count} / {ioc_validated}</div>"
         f"<div class='kv-key'>TTP Coverage</div><div class='kv-val'>{len(ttps)} techniques</div>"
         f"</div>"
@@ -2425,7 +2477,7 @@ def render_report(item: dict, public_prefix: str) -> str:
     # P0 #721: same canonical KEV parser as build_report_sections (plain bool() read
     # legacy strings such as "NO"/"false" as KEV-confirmed -> header/body contradiction).
     _kev         = _kev_confirmed_check(item)
-    _kev_disp    = "YES &#x26A0;" if _kev else "No KEV listing found"
+    _kev_disp    = "YES &#x26A0;" if _kev else "Not verified in this record"
     _sevb_hdr    = _di.severity_basis(item, _cvss_resolved, _kev)
     if _sevb_hdr["rated"]:
         sev = _sevb_hdr["display"]
@@ -2437,13 +2489,9 @@ def render_report(item: dict, public_prefix: str) -> str:
     # Patch wording only when there is something to patch (RX-PR1 rule).
     _hdr_has_cve = bool(item.get("cve_id")) or bool(re.search(
         r"CVE-\d{4}-\d+", f"{item.get('title') or ''} {item.get('description') or ''}", re.IGNORECASE))
-    _urgency_txt = ("PATCH IMMEDIATELY" if (sev == "CRITICAL" and _hdr_has_cve) else
-                    "RESPOND IMMEDIATELY" if sev == "CRITICAL" else
-                    "HIGH PRIORITY"    if sev == "HIGH"     else
-                    "PATCH STANDARD"   if (sev == "MEDIUM" and _hdr_has_cve) else
-                    "STANDARD PRIORITY" if sev == "MEDIUM" else "MONITOR")
-    if not _sevb_hdr["prioritized"]:
-        _urgency_txt = "TRIAGE REQUIRED"
+    _urgency_txt, _exec_action_for_header = _public_report_action_contract(
+        sev, _hdr_has_cve, _kev, _sevb_hdr["prioritized"]
+    )
     _sev_tile    = ("crit" if sev == "CRITICAL" else "high" if sev == "HIGH" else
                     "med"  if sev == "MEDIUM"   else "low"  if sev == "LOW"  else "neutral")
     if _sevb_hdr["display"] == "UNRATED":
@@ -2573,7 +2621,7 @@ def render_report(item: dict, public_prefix: str) -> str:
   <div class='exec-tile {"crit" if _kev else "neutral"}'>
     <div class='exec-tile-label'>IOC obs. / valid. / KEV</div>
     <div class='exec-tile-val'>{len(_ioc_list)}<span style='font-size:12px;font-weight:400'> / {_ioc_validated_hdr}</span></div>
-    <div class='exec-tile-sub'>{"KEV CONFIRMED" if _kev else "No KEV entry"}</div>
+    <div class='exec-tile-sub'>{"KEV CONFIRMED" if _kev else "KEV status not verified"}</div>
   </div>
 </div>
 
