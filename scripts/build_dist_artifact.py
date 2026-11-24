@@ -254,6 +254,9 @@ INCLUDE_DIR_FILE_EXCLUDES = {
     # of invented subscriber emails with MRR, hard-coded per-plan subscriber
     # counts and a "Pro Subscribers 71" goal as if they were real.
     "dashboard": ("revenue_acceleration.html",),
+    # PRO delivery is authenticated through the Worker/private R2, not Pages.
+    # TLP:CLEAR is not equivalent to permission to distribute a paid bundle.
+    "api": ("v1/intel/latest_pro.json",),
 }
 
 
@@ -1131,6 +1134,11 @@ def main() -> int:
         "node", str(REPO_ROOT / "scripts" / "sentinel-branding.cjs"),
         str(DIST_DIR), "SENTINEL APEX Threat Intel Platform",
     ], check=True)
+
+    # Defense in depth: stop if another packaging step restored paid content.
+    if (DIST_DIR / "api/v1/intel/latest_pro.json").exists():
+        log.error("HARD FAIL -- private PRO bundle present in public artifact")
+        return 1
 
     # ── 7. Build deployment manifest ────────────────────────────────────────
     log.info("")

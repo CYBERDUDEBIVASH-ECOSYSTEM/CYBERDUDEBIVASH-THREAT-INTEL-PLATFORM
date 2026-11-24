@@ -116,3 +116,23 @@ def test_no_shipped_page_links_to_a_quarantined_page():
             for p in shipped_pages()}
     assert not {k: v for k, v in hits.items() if v}, hits
     assert link.search('<a href="/dashboard/revenue_acceleration.html">'), "link pattern went blind"
+
+
+def test_private_pro_bundle_excluded_without_removing_public_neighbors(tmp_path):
+    api = tmp_path / "api"
+    intel = api / "v1" / "intel"
+    intel.mkdir(parents=True)
+    for name in ("latest_pro.json", "latest.json", "top10.json", "apex.json", "manifest.json"):
+        (intel / name).write_text("{}", encoding="utf-8")
+    assert bda.is_excluded_by_design("api/v1/intel/latest_pro.json")
+    assert bda.prune_include_dir_excludes("api", api) == 1
+    assert not (intel / "latest_pro.json").exists()
+    for name in ("latest.json", "top10.json", "apex.json", "manifest.json"):
+        assert (intel / name).is_file()
+        assert not bda.is_excluded_by_design("api/v1/intel/" + name)
+    assert bda.prune_include_dir_excludes("api", api) == 0
+
+
+def test_private_pro_boundary_runs_before_deployment_manifest():
+    src = (REPO / "scripts" / "build_dist_artifact.py").read_text(encoding="utf-8")
+    assert src.index('if (DIST_DIR / "api/v1/intel/latest_pro.json").exists():') < src.index("# ── 7. Build deployment manifest")
