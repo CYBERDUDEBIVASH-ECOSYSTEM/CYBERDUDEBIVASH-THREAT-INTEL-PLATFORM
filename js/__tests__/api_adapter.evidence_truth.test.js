@@ -85,3 +85,48 @@ test("scalar zero, booleans and normal source text retain original representatio
   assert.equal(item.source, "NVD");
   assert.ok(item.ai_verdict.startsWith("Source-grounded model text"));
 });
+
+test("KEV truth parser never interprets a false string or JSON object as confirmed", () => {
+  for (const flag of [false, 0, "NO", "false", "0", "", null, undefined,
+                      {}, [], { toString: null }, "unverified", "not listed"]) {
+    const item = Adapter.normalizeIntelItem({
+      id: "intel--unknown-kev", severity: "HIGH", kev_present: flag,
+    }, 0);
+    assert.equal(item.kev_present, false, "malformed KEV must remain unverified");
+  }
+  for (const flag of [true, 1, "true", "YES", "confirmed"]) {
+    const item = Adapter.normalizeIntelItem({
+      id: "intel--verified-kev", severity: "HIGH", kev_present: flag,
+    }, 0);
+    assert.equal(item.kev_present, true, "recognized positive KEV is preserved");
+  }
+});
+
+test("non-coercible JSON numeric fields cannot crash a customer advisory", () => {
+  const invalid = { toString: null, valueOf: null };
+  const item = Adapter.normalizeIntelItem({
+    id: "intel--numeric-boundary",
+    severity: invalid,
+    sla_priority: invalid,
+    confidence: invalid,
+    confidence_score: invalid,
+    epss_score: invalid,
+    cvss_score: invalid,
+    risk_score: invalid,
+    ttp_count: invalid,
+    ioc_count: invalid,
+    apex_ai: { ai_confidence: invalid, predictive_risk: invalid, ttp_density: invalid },
+    ioc_paywall: { locked: invalid, count: invalid, confidence: invalid },
+    kev_present: invalid,
+  }, 0);
+  assert.equal(item.kev_present, false);
+  assert.equal(item.cvss_score, null);
+  assert.equal(item.epss_score, null);
+  assert.equal(item.confidence, 0);
+  assert.equal(item.apex_ai.soc_priority, "P4");
+  assert.equal(item.risk_score.raw, 0);
+  assert.equal(item.ioc_count, 0);
+  assert.equal(item.ttp_count, 0);
+  // Malformed entitlement flag stays fail-closed, never unlocked by parsing.
+  assert.equal(item.ioc_paywall.locked, true);
+});
