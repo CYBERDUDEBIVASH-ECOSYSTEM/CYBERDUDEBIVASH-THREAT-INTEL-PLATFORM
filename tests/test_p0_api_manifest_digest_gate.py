@@ -30,17 +30,28 @@ class ManifestDigestGateTests(unittest.TestCase):
             )
             out = root / "api" / "v1" / "intel"
             out.mkdir(parents=True)
-            payload = {"schema_version": "1.0", "count": 1,
-                       "items": [{"id": "synthetic-test", "title": "é" * 90}]}
-            digest = hashlib.sha256(json.dumps(
-                payload, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8")).hexdigest()
-            payload["sha256"] = digest
-            registry = {"bundles": {key: {"sha256": digest}
-                                    for key in ("latest", "top10", "apex")}}
+            generated = "2026-11-24T10:10:49Z"
+            payloads = {}
+            registry = {"generated_at": generated, "bundles": {}}
+            for key in ("latest", "top10", "apex", "latest_pro"):
+                payload = {"schema_version": "1.0", "generated_at": generated,
+                           "count": 1, "items": [
+                               {"id": "synthetic-test", "title": "é" * 90}
+                           ]}
+                if key == "latest_pro":
+                    payload["tier"] = "PRO"
+                digest = hashlib.sha256(json.dumps(
+                    payload, ensure_ascii=False, separators=(",", ":")
+                ).encode("utf-8")).hexdigest()
+                payload["sha256"] = digest
+                payloads[key] = payload
+                registry["bundles"][key] = {
+                    "sha256": digest, "count": 1, "generated_at": generated,
+                    "path": "api/v1/intel/" + key + ".json",
+                }
             if mutation:
-                mutation(payload, registry)
-            for key in ("latest", "top10", "apex"):
+                mutation(payloads["latest"], registry)
+            for key, payload in payloads.items():
                 (out / (key + ".json")).write_text(
                     json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                     encoding="utf-8",
@@ -83,6 +94,31 @@ class ManifestDigestGateTests(unittest.TestCase):
 
     def test_missing_embedded_digest(self):
         self.assert_digest_rejected(lambda payload, registry: payload.pop("sha256"))
+
+    def test_other_bundle_digest_mismatches(self):
+        for key in ("top10", "apex", "latest_pro"):
+            with self.subTest(bundle=key):
+                self.assert_digest_rejected(
+                    lambda payload, registry: registry["bundles"][key].update(
+                        sha256="0" * 64)
+                )
+
+    def test_paid_registry_count_mismatch(self):
+        self.assert_digest_rejected(
+            lambda payload, registry: registry["bundles"]["latest_pro"].update(count=2)
+        )
+
+    def test_paid_registry_generation_mismatch(self):
+        self.assert_digest_rejected(
+            lambda payload, registry: registry["bundles"]["latest_pro"].update(
+                generated_at="2026-08-26T09:55:27Z")
+        )
+
+    def test_registry_path_mismatch(self):
+        self.assert_digest_rejected(
+            lambda payload, registry: registry["bundles"]["apex"].update(
+                path="api/v1/intel/latest.json")
+        )
 
     def test_matching_but_forged_registry_and_embedded_digests(self):
         def mutate(payload, registry):
