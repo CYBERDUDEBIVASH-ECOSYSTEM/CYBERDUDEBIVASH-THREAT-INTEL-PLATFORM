@@ -38,19 +38,46 @@
     if (v !== null && v !== "") return v;
     return primitive(fallback) ?? "";
   }
-  function _num(val, fallback)  { const n = parseFloat(val); return isNaN(n) ? (fallback !== undefined ? Number(fallback) : 0) : n; }
-  function _int(val, fallback)  { const n = parseInt(val, 10); return isNaN(n) ? (fallback !== undefined ? parseInt(fallback, 10) : 0) : n; }
+  // Avoid invoking coercion hooks on untrusted object-valued JSON fields.
+  function _safeFloat(v) {
+    if (typeof v !== "string" && typeof v !== "number") return NaN;
+    if (typeof v === "string" && !v.trim()) return NaN;
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : NaN;
+  }
+  function _num(val, fallback) {
+    const n = _safeFloat(val);
+    if (Number.isFinite(n)) return n;
+    const f = _safeFloat(fallback);
+    return Number.isFinite(f) ? f : 0;
+  }
+  function _int(val, fallback) {
+    const primitive = v => (typeof v === "string" || typeof v === "number") ? parseInt(v, 10) : NaN;
+    const n = primitive(val);
+    if (Number.isFinite(n)) return n;
+    const f = primitive(fallback);
+    return Number.isFinite(f) ? f : 0;
+  }
   function _bool(val, fallback) { if (val === null || val === undefined) return fallback !== undefined ? Boolean(fallback) : false; return Boolean(val); }
   function _arr(val)  { if (!val || !Array.isArray(val)) return []; return val; }
   function _obj(val)  { if (!val || typeof val !== "object" || Array.isArray(val)) return {}; return val; }
-  function _nullableNum(val) { if (val === null || val === undefined) return null; const n = parseFloat(val); return isNaN(n) ? null : n; }
+  function _nullableNum(val) {
+    const n = _safeFloat(val);
+    return Number.isFinite(n) ? n : null;
+  }
+  function _verifiedKevFlag(value) {
+    if (value === true || value === 1) return true;
+    if (typeof value === "string") return /^(true|yes|1|confirmed)$/i.test(value.trim());
+    // Unknown structures, "NO", "false", and invalid scalars are not KEV proof.
+    return false;
+  }
 
   /* ── SEVERITY SYSTEM ───────────────────────────────────────────────────── */
   const SEVERITY_MAP = { CRITICAL: "CRITICAL", HIGH: "HIGH", MEDIUM: "MEDIUM", LOW: "LOW", INFO: "INFO" };
 
   function normalizeSeverity(raw) {
     if (!raw) return "LOW";
-    const upper = String(raw).toUpperCase().trim();
+    const upper = _str(raw, "").toUpperCase().trim();
     return SEVERITY_MAP[upper] || "LOW";
   }
 
@@ -91,7 +118,7 @@
 
   function normalizeSocPriority(raw) {
     if (!raw) return "UNKNOWN";
-    const upper = String(raw).toUpperCase().trim();
+    const upper = _str(raw, "").toUpperCase().trim();
     if (VALID_SOC_PRIORITIES.includes(upper)) return upper;
     return "UNKNOWN";
   }
@@ -479,7 +506,7 @@
   /* ── EPSS / CVSS HELPERS ───────────────────────────────────────────────── */
   function buildEpssScore(raw) {
     if (raw === null || raw === undefined) return null;
-    const n = parseFloat(raw);
+    const n = _safeFloat(raw);
     if (isNaN(n)) return null;
     // Normalize mixed-scale storage: pipeline may store as 0-1 fraction OR 0-100 percentage
     const frac = n > 1.0 ? n / 100 : n;
@@ -495,7 +522,7 @@
 
   function buildCvssScore(raw) {
     if (raw === null || raw === undefined) return null;
-    const n = parseFloat(raw);
+    const n = _safeFloat(raw);
     if (isNaN(n)) return null;
     let rating = "INFORMATIONAL", color = "#6b7280";
     if (n >= 9.0)      { rating = "CRITICAL"; color = "#ff1a1a"; }
@@ -643,7 +670,7 @@
     const cvssRaw  = raw.cvss_score !== undefined ? raw.cvss_score : _nullableNum(apexObj.cvss3);
     const epssObj  = buildEpssScore(epssRaw);
     const cvssObj  = buildCvssScore(cvssRaw);
-    const kev      = _bool(raw.kev_present, false);
+    const kev      = _verifiedKevFlag(raw.kev_present);
     const actionRec = generateActionRecommendation(sev, socPri, epssObj, cvssObj, kev);
     const rawTtps  = _arr(raw.ttps);
     const ttps = rawTtps.map(function(t) {
