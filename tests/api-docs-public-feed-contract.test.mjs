@@ -70,7 +70,7 @@ function authenticationErrors(document) {
   if (!section.includes('Routes that document Bearer-session authentication use the documented session flow.')) errors.push('documented session authentication missing');
   if (!section.includes('Access remains subject to the endpoint-specific subscription and authorization requirements.')) errors.push('entitlement boundary missing');
   if (section.includes('All authenticated endpoints require an API key')) errors.push('universal API-key claim');
-  if (!section.includes('https://intel.cyberdudebivash.com/api/v1/export/sigma?limit=5')) errors.push('authenticated example must use paid Sigma route');
+  if (!section.includes('https://intel.cyberdudebivash.com/api/account/usage')) errors.push('authenticated example must use the account usage route');
   if (section.includes('https://intel.cyberdudebivash.com/api/feed')) errors.push('keyless feed used as authenticated example');
   return errors;
 }
@@ -86,7 +86,7 @@ test('authentication gate rejects universal key claims, missing authorization bo
     ['For authenticated API-key routes, pass your key in the <code>X-API-Key</code> header.', 'All authenticated endpoints require an API key'],
     ['Routes that document Bearer-session authentication use the documented session flow.', ''],
     ['Access remains subject to the endpoint-specific subscription and authorization requirements.', ''],
-    ['https://intel.cyberdudebivash.com/api/v1/export/sigma?limit=5', 'https://intel.cyberdudebivash.com/api/feed'],
+    ['https://intel.cyberdudebivash.com/api/account/usage', 'https://intel.cyberdudebivash.com/api/feed'],
   ]) {
     const mutated = html.replace(before, after);
     assert.notEqual(mutated, html, 'negative control must mutate the document');
