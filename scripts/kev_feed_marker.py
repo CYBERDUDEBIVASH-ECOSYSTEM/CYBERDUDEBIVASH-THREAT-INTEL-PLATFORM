@@ -174,67 +174,91 @@ def main() -> int:
             "status": "CATALOG_UNAVAILABLE"}, indent=2), encoding="utf-8")
         return 0
 
-    marked = already_kev = deflated = 0
+    marked = already_kev = deflated = reconciled = 0
     kev_items = []
+    kev_meta_fields = (
+        "kev_date", "kev_product", "kev_name", "kev_action", "kev_due",
+        "kev_cve", "kev_cve_ids", "_kev_marked_at", "_kev_source",
+    )
+    verified_at = datetime.now(timezone.utc).isoformat()
 
     for item in items:
+        if not isinstance(item, dict):
+            # Never report PASS on malformed input or partially publish rows.
+            # The feed is not written before this validation succeeds.
+            log.error("Malformed non-object feed row; blocking KEV publication")
+            return 1
+
         cves = _extract_cve(item)
-        currently_kev = _is_kev_true(
-            item.get("kev") or item.get("kev_confirmed") or item.get("kev_present"))
+        # Check fields independently: kev="NO" must never shadow a valid
+        # kev_present=True on a different legacy source field.
+        currently_kev = any(
+            _is_kev_true(item.get(key))
+            for key in ("kev", "kev_confirmed", "kev_present")
+        )
+        matched_cves = sorted(c for c in set(cves) if c in catalog)
 
-        if not cves:
+        if matched_cves:
+            # Record-level kev_present means AT LEAST ONE referenced CVE is in
+            # CISA KEV. Exact per-CVE membership is retained separately so a
+            # multi-CVE news report never implies that every CVE is exploited.
+            matched_cve = matched_cves[0]
+            matched_entry = catalog[matched_cve]
+            product = (
+                str(matched_entry.get("vendor_project") or "") + " "
+                + str(matched_entry.get("product") or "")
+            ).strip()
+            canonical = {
+                "kev": True,
+                "kev_confirmed": True,
+                "kev_present": True,
+                "kev_cve": matched_cve,
+                "kev_cve_ids": matched_cves,
+                "kev_date": matched_entry.get("date_added", ""),
+                "kev_product": product,
+                "kev_name": matched_entry.get("vulnerability_name", ""),
+                "kev_action": matched_entry.get("required_action", ""),
+                "kev_due": matched_entry.get("due_date", ""),
+                "_kev_source": "CISA-KEV-v2",
+                "_kev_marked_at": item.get("_kev_marked_at") or verified_at,
+            }
+            changed = any(item.get(k) != v for k, v in canonical.items())
             if currently_kev:
                 already_kev += 1
-            continue
-
-        matched_cve = matched_entry = None
-        for cve in cves:
-            if cve in catalog:
-                matched_cve   = cve
-                matched_entry = catalog[cve]
-                break
-
-        if matched_entry:
-            # CVE IS in KEV catalog
-            if currently_kev:
-                already_kev += 1
-                continue
-            # Mark it
-            vp = matched_entry["vendor_project"]
-            pr = matched_entry["product"]
-            item["kev"]            = True
-            item["kev_confirmed"]  = True
-            item["kev_present"]    = True
-            item["kev_date"]       = matched_entry["date_added"]
-            item["kev_product"]    = (vp + " " + pr).strip()
-            item["kev_name"]       = matched_entry.get("vulnerability_name", "")
-            item["kev_action"]     = matched_entry.get("required_action", "")
-            item["kev_due"]        = matched_entry.get("due_date", "")
-            item["risk_score"]     = max(float(item.get("risk_score") or 0), 9.0)
-            item["severity"]       = "CRITICAL"
-            item["confidence"]     = max(int(item.get("confidence") or 0), 90)
-            item["_kev_marked_at"] = datetime.now(timezone.utc).isoformat()
-            item["_kev_source"]    = "CISA-KEV-v2"
-            marked += 1
-            kev_items.append({"cve": matched_cve, "title": item.get("title", "")[:80],
-                               "kev_date": matched_entry["date_added"],
-                               "kev_product": item["kev_product"]})
-            log.info("[KEV] Marked: %s — %s (%s)",
-                     matched_cve, item.get("title", "")[:60], matched_entry["date_added"])
+                if changed:
+                    reconciled += 1
+            else:
+                marked += 1
+                kev_items.append({
+                    "cve": matched_cve,
+                    "matched_cves": matched_cves,
+                    "title": str(item.get("title") or "")[:80],
+                    "kev_date": canonical["kev_date"],
+                    "kev_product": product,
+                })
+            if changed:
+                item.update(canonical)
+                log.info("[KEV-VERIFIED] %s (matched=%d; newly=%s)",
+                         matched_cve, len(matched_cves), not currently_kev)
+            # Do NOT manufacture CVSS severity, APEX risk or a confidence
+            # score. KEV is an independent exploitation/prioritisation signal.
         else:
-            # CVE present but NOT in KEV catalog — de-inflate false positives
-            if currently_kev:
-                item["kev"] = item["kev_confirmed"] = item["kev_present"] = False
-                for kf in ("kev_date","kev_product","kev_name","kev_action",
-                           "kev_due","_kev_marked_at","_kev_source"):
-                    item.pop(kf, None)
+            # An unverified pre-existing KEV flag MUST NOT survive just because
+            # no CVE was parsed, or because stale metadata was attached.
+            stale = any(item.get(k) not in (None, "", []) for k in kev_meta_fields)
+            if currently_kev or stale:
+                item["kev"] = False
+                item["kev_confirmed"] = False
+                item["kev_present"] = False
+                for key in kev_meta_fields:
+                    item.pop(key, None)
                 deflated += 1
-                log.info("[KEV-DEFLATE] Cleared false kev=True: %s — %s",
-                         sorted(cves)[:3], item.get("title", "")[:60])
+                log.warning("[KEV-DEFLATE] no catalog match (%d parsed CVEs): %s",
+                            len(cves), str(item.get("title") or "")[:65])
 
     log.info("─" * 60)
-    log.info("KEV marking complete: %d newly marked, %d already KEV, %d deflated, %d total",
-             marked, already_kev, deflated, len(items))
+    log.info("KEV marking complete: %d marked, %d already, %d reconciled, %d deflated, %d total",
+             marked, already_kev, reconciled, deflated, len(items))
 
     total_kev = marked + already_kev
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -244,6 +268,7 @@ def main() -> int:
         "feed_items":        len(items),
         "items_marked":      marked,
         "items_deflated":    deflated,
+        "items_reconciled":  reconciled,
         "already_kev":       already_kev,
         "total_kev_in_feed": total_kev,
         "kev_items":         kev_items,
@@ -253,10 +278,10 @@ def main() -> int:
     log.info("Report written: %s", REPORT_PATH)
 
     if DRY_RUN:
-        log.info("[DRY RUN] Would write %d marked, %d deflated", marked, deflated)
+        log.info("[DRY RUN] Would write %d marked, %d reconciled, %d deflated", marked, reconciled, deflated)
         return 0
 
-    if marked == 0 and deflated == 0:
+    if marked == 0 and reconciled == 0 and deflated == 0:
         log.info("No KEV changes — feed unchanged")
         return 0
 
