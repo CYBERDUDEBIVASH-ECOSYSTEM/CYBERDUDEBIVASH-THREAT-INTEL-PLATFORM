@@ -6700,6 +6700,7 @@ const READ_ROUTE_ALIASES = new Map([
 // MAIN REQUEST HANDLER
 // =============================================================================
 
+const _FEED_MEMO = { etag: null, data: null, freeItems: null, freeItemsJson: null };
 async function handleRequest(request, env, ctx) {
   const url      = new URL(request.url);
   const method   = request.method.toUpperCase();
@@ -7894,34 +7895,60 @@ async function handleRequest(request, env, ctx) {
 
   // --- /api/feed + /api/feed.json (legacy) ------------------------------------
   if (path === "/api/feed" || path === "/api/feed.json" || path === "/feed.json") {
-    let data = await r2Get(env, LATEST_JSON_KEY);
-    if (!data) return errorResp("Feed not available", 503);
-    // This object can predate the publishing TLP gate. Verify the
-    // *complete* stored document before FREE/paid tier projection; no
-    // restricted record can be reintroduced by a stale R2 or KV copy.
-    if (!publicTlpJsonVerified(data)) {
-      return jsonResp({ error: "verified_intelligence_unavailable" }, 503, { "Cache-Control": "no-store" });
+    // CPU GUARDRAIL (shared-account zero-overage mandate, Workers CPU is the binding constraint): this route was
+    // measured at ~13 ms CPU per cache-miss request, dominated by re-parsing, re-walking, re-projecting and
+    // re-serialising the same ~700 KB stored document on every request. The verified FREE-tier items are a pure
+    // function of the stored bytes (the TLP verification and the free-tier gate in revenue-enforcement.js: no clock,
+    // request, env or module state), so they are computed ONCE per R2 object version (etag) per isolate and reused.
+    // INVARIANTS -- do not weaken:
+    //   * A document enters the memo only AFTER publicTlpJsonVerified() accepted it; same etag == same bytes == same verdict.
+    //   * Everything time- or request-dependent still runs on EVERY request: denyNonFreshLiveFeed (stale => 503),
+    //     publicationEnvelope, live-indicator summary, Cache-Control derivation, tier choice. A memo hit can never
+    //     serve a stale feed.
+    //   * Paid tiers never use the memo (their body is private/no-store and unprojected).
+    //   * A missing/failed head(), or an object without an etag, falls back to the full read path (no memo).
+    //   * Output is byte-identical to the previous implementation (pinned by src/__tests__/feed-free-tier-memo.test.js).
+    const paidFeed = auth.tier === TIERS.PRO || auth.tier === TIERS.ENTERPRISE || auth.tier === TIERS.MSSP;
+    let data = null, freeItemsJson = null, freeItems = null, memoEtag = null;
+    if (!paidFeed && env.INTEL_R2 && typeof env.INTEL_R2.head === "function") {
+      try {
+        const h = await env.INTEL_R2.head(LATEST_JSON_KEY);
+        if (h && h.etag && _FEED_MEMO.etag === h.etag) { data = _FEED_MEMO.data; freeItemsJson = _FEED_MEMO.freeItemsJson; freeItems = _FEED_MEMO.freeItems; }
+      } catch (_) { data = null; freeItemsJson = null; freeItems = null; }
     }
-    // P0 R36: fail CLOSED with HTTP 503 and no items on stale/unverified
-    // intelligence. The verdict is bound to the stored source generation,
-    // never the request clock; guard executes before tier projection.
+    if (!data) {
+      let raw = null;
+      try {
+        const obj = await env.INTEL_R2.get(LATEST_JSON_KEY);
+        if (obj) { memoEtag = obj.etag || null; const text = await obj.text(); if (text && text.trim() !== "") raw = JSON.parse(text); }
+      } catch (_) { raw = null; }
+      data = raw;
+      if (!data) return errorResp("Feed not available", 503);
+      if (!publicTlpJsonVerified(data)) {
+        return jsonResp({ error: "verified_intelligence_unavailable" }, 503, { "Cache-Control": "no-store" });
+      }
+    }
     const feedTruth = publicationEnvelope(data, Date.now(), 120);
     const unavailable = denyNonFreshLiveFeed(data);
     if (unavailable) return jsonResp(unavailable.body, unavailable.status, unavailable.headers);
-    // Legacy alias for /api/v1/intel/latest.json -- same key, same gate.
-    const paidFeed = auth.tier === TIERS.PRO || auth.tier === TIERS.ENTERPRISE || auth.tier === TIERS.MSSP;
-    if (!paidFeed && Array.isArray(data.items)) {
-      data = { ...data, items: data.items.map(i => applyTierGateV2(i, "free", null)) };
+    // Projection runs AFTER the freshness verdict, exactly as before, so a stale feed is still refused first.
+    if (!paidFeed && freeItems === null && Array.isArray(data.items)) {
+      freeItems = data.items.map(i => applyTierGateV2(i, "free", null));
+      freeItemsJson = JSON.stringify(freeItems);
+      if (memoEtag) { _FEED_MEMO.etag = memoEtag; _FEED_MEMO.data = data; _FEED_MEMO.freeItems = freeItems; _FEED_MEMO.freeItemsJson = freeItemsJson; }
     }
-    // v201.0: same additive-only live-indicators field as /api/preview above.
+    const PLACEHOLDER = "__CDB_FEED_ITEMS_PLACEHOLDER__";
+    if (!paidFeed && freeItems !== null) data = { ...data, items: freeItems };
     const liveIndicators = await getLiveIndicatorsSummary(env);
     if (liveIndicators) data = { ...data, live_indicators_summary: liveIndicators };
     data = { ...data, ...feedTruth.fields };
-    // A paid (ungated) body must never be stored in the shared URL-keyed edge
-    // cache, where an anonymous caller would be served it.
     const feedHeaders = paidFeed
       ? { ...feedTruth.headers, "Cache-Control": "private, no-store" }
       : { ...feedTruth.headers, "Cache-Control": liveFreshCacheControl(data, 120), "X-Sentinel-Edge-Ttl": String(feedTruth.edge_ttl_seconds) };
+    if (!paidFeed && freeItemsJson !== null) {
+      const body = JSON.stringify({ ...data, items: PLACEHOLDER }).replace(JSON.stringify(PLACEHOLDER), () => freeItemsJson);
+      return new Response(body, { status: 200, headers: { ...CORS_HEADERS, ...SECURITY_HEADERS, ...JSON_CONTENT, ...feedHeaders } });
+    }
     return jsonResp(data, 200, feedHeaders);
   }
 
