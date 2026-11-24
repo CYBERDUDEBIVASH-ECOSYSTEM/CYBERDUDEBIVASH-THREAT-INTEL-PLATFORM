@@ -13,7 +13,7 @@ Checks:
   2. api/v1/intel/top10.json   -- exists, valid JSON, count >= 1
   3. api/v1/intel/apex.json    -- exists, valid JSON, count >= 1
   4. api/v1/intel/manifest.json -- exists, valid JSON, all bundle refs present
-  5. Checksum consistency       -- manifest sha256 matches actual bundle sha256
+  5. Four bundle digests, counts, generation metadata and registry paths
   6. index.html NOT mutated     -- EMBEDDED_INTEL must be [] (empty stub)
 
 Exit 0 = PASS (deployment allowed)
@@ -107,7 +107,7 @@ try:
     with open(manifest_path, 'r', encoding='utf-8') as f:
         registry = json.load(f)
     bundles = registry.get('bundles', {})
-    required = {'latest', 'top10', 'apex'}
+    required = {'latest', 'top10', 'apex', 'latest_pro'}
     present  = set(bundles.keys())
     missing  = required - present
     check('manifest.json all bundle refs present', len(missing) == 0,
@@ -118,28 +118,48 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
 
 # ── Check 5: Checksum consistency ────────────────────────────────────────────
 print('\n[5] Checksum consistency (registry == embedded == unsigned payload SHA-256)', flush=True)
-if registry and os.path.exists(latest_path):
+# Check each generated artifact against its own registry entry. Never
+# follow a registry-supplied path; only the four producer-owned names are read.
+bundle_errors = []
+for key in ('latest', 'top10', 'apex', 'latest_pro'):
+    path = os.path.join(OUT_DIR, key + '.json')
     try:
-        # The producer hashes compact UTF-8 JSON BEFORE adding sha256.
-        # Reconstruct that exact unsigned payload without changing the file.
-        with open(latest_path, 'r', encoding='utf-8') as f:
+        if not registry:
+            raise ValueError('registry unavailable')
+        entry = registry['bundles'][key]
+        with open(path, 'r', encoding='utf-8') as f:
             signed = json.load(f)
         unsigned = dict(signed)
         embedded = unsigned.pop('sha256', None)
         actual_sha = hashlib.sha256(json.dumps(
             unsigned, ensure_ascii=False, separators=(',', ':')
         ).encode('utf-8')).hexdigest()
-        recorded = registry.get('bundles', {}).get('latest', {}).get('sha256')
-        sz = os.path.getsize(latest_path)
-        check('latest.json checksum + size valid',
-              sz > 100 and embedded == recorded == actual_sha,
-              f'{sz:,} bytes, payload sha256={actual_sha[:16]}...',
-              'bundle size or embedded/registry/payload digest mismatch')
-    except Exception as e:
-        check('latest.json checksum + size valid', False, msg_fail=str(e))
-else:
-    check('latest.json checksum + size valid', False,
-          msg_fail='registry or latest.json missing')
+        if not (os.path.getsize(path) > 100
+                and embedded == entry.get('sha256') == actual_sha):
+            raise ValueError('digest mismatch')
+        items = signed.get('items')
+        count = signed.get('count')
+        if (not isinstance(items, list) or not items
+                or type(count) is not int or count != len(items)
+                or type(entry.get('count')) is not int
+                or entry['count'] != count):
+            raise ValueError('count mismatch')
+        generated = signed.get('generated_at')
+        if (not isinstance(generated, str) or not generated.strip()
+                or generated != entry.get('generated_at')
+                or generated != registry.get('generated_at')):
+            raise ValueError('generation mismatch')
+        if entry.get('path') != 'api/v1/intel/' + key + '.json':
+            raise ValueError('registry path mismatch')
+        if key == 'latest_pro' and signed.get('tier') != 'PRO':
+            raise ValueError('tier mismatch')
+        print(f'  [INFO] {key}.json integrity verified', flush=True)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError):
+        # Never print untrusted payloads or paid intelligence into CI logs.
+        bundle_errors.append(key)
+check('all generated bundle checksums and metadata valid', not bundle_errors,
+      '4/4 bundles verified',
+      'bundle digest mismatch or metadata mismatch: ' + ', '.join(bundle_errors))
 
 # ── Check 5.5: ai_summary.json (AI Brain endpoint — non-blocking) ────────────
 print('\n[5.5] api/v1/intel/ai_summary.json (AI Brain endpoint)', flush=True)
