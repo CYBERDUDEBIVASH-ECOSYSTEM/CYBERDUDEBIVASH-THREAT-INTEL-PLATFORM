@@ -205,13 +205,18 @@
                || BUSINESS_IMPACT_MAP[cat]
                || BUSINESS_IMPACT_MAP["default"];
 
-    const sevImpact = map[sev] || map["MEDIUM"] || map["LOW"];
+    // P0-03 / 2026-11-24 customer-truth gate:
+    // The map above contains *illustrative* category/severity narratives; it
+    // receives no customer telemetry, assets, loss model, jurisdiction or
+    // incident confirmation. Never publish those canned monetary estimates,
+    // legal duties or breach/compromise assertions as customer evidence.
+    // Keep the response shape for every existing UI consumer.
     return {
-      financial_risk:       sevImpact.financial      || "Exposure under assessment",
-      operational_impact:   sevImpact.operational    || "Impact under investigation",
-      compliance_exposure:  sevImpact.compliance     || "Review compliance posture",
-      customer_impact:      sevImpact.customer       || "Customer impact being assessed",
-      infrastructure_risk:  sevImpact.infrastructure || "Infrastructure risk being evaluated",
+      financial_risk:       "NOT ASSESSED — no customer-specific loss inputs available",
+      operational_impact:   "POTENTIAL IMPACT ONLY — determine affected assets, controls and observed activity",
+      compliance_exposure:  "NOT DETERMINED — depends on jurisdiction, affected data and confirmed incident facts",
+      customer_impact:      "UNKNOWN — no customer exposure or compromise verified by this advisory",
+      infrastructure_risk:  "ASSESS — map source-supported conditions to affected asset versions and reachability",
       severity:             sev,
     };
   }
