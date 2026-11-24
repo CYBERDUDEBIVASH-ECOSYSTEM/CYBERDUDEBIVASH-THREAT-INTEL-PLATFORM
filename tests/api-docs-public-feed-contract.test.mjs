@@ -59,8 +59,37 @@ test('a fake public API key or wrong JSON-array claim fails the documentation ga
   assert.ok(contractErrors(badShape).length > 0, 'negative control: wrong envelope');
 });
 
+function authenticationErrors(document) {
+  const visible = document.replace(/<!--[\s\S]*?-->/g, '');
+  const start = visible.indexOf('<h2 id="authentication">');
+  const end = visible.indexOf('<h2 id="rate-limits">', start);
+  if (start < 0 || end <= start) return ['missing authentication section'];
+  const section = visible.slice(start, end);
+  const errors = [];
+  if (!section.includes('For authenticated API-key routes, pass your key in the <code>X-API-Key</code> header.')) errors.push('API-key header not documented');
+  if (!section.includes('Routes that document Bearer-session authentication use the documented session flow.')) errors.push('documented session authentication missing');
+  if (!section.includes('Access remains subject to the endpoint-specific subscription and authorization requirements.')) errors.push('entitlement boundary missing');
+  if (section.includes('All authenticated endpoints require an API key')) errors.push('universal API-key claim');
+  if (!section.includes('https://intel.cyberdudebivash.com/api/v1/export/sigma?limit=5')) errors.push('authenticated example must use paid Sigma route');
+  if (section.includes('https://intel.cyberdudebivash.com/api/feed')) errors.push('keyless feed used as authenticated example');
+  return errors;
+}
+
 test('authenticated endpoints remain documented separately from Community', () => {
-  assert.ok(html.includes('All authenticated endpoints require an API key'));
+  assert.deepEqual(authenticationErrors(html), []);
   assert.ok(html.includes('Enterprise webhook operations'));
   assert.ok(html.includes('Pro+ Sigma export'));
+});
+
+test('authentication gate rejects universal key claims, missing authorization boundaries and keyless examples', () => {
+  for (const [before, after] of [
+    ['For authenticated API-key routes, pass your key in the <code>X-API-Key</code> header.', 'All authenticated endpoints require an API key'],
+    ['Routes that document Bearer-session authentication use the documented session flow.', ''],
+    ['Access remains subject to the endpoint-specific subscription and authorization requirements.', ''],
+    ['https://intel.cyberdudebivash.com/api/v1/export/sigma?limit=5', 'https://intel.cyberdudebivash.com/api/feed'],
+  ]) {
+    const mutated = html.replace(before, after);
+    assert.notEqual(mutated, html, 'negative control must mutate the document');
+    assert.ok(authenticationErrors(mutated).length > 0, before);
+  }
 });

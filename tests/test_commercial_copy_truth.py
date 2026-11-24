@@ -77,9 +77,9 @@ def test_api_docs_rate_limits_match_canonical_commercial_contract():
 
     expected = {
         "Free": ("free", "Public endpoints only"),
-        "Professional": ("pro", "All endpoints"),
-        "Enterprise": ("enterprise", "All endpoints + SIEM"),
-        "MSSP": ("mssp", "All + Multi-tenant"),
+        "Professional": ("pro", "Public and PRO-eligible endpoints; Enterprise and MSSP restrictions apply"),
+        "Enterprise": ("enterprise", "Public, PRO and Enterprise-eligible endpoints, including SIEM; MSSP-only routes excluded"),
+        "MSSP": ("mssp", "Tier-eligible endpoints, including MSSP multi-tenant routes; tenant and role authorization apply"),
     }
     for label, (tier_id, endpoint_copy) in expected.items():
         tier = contract["tiers"][tier_id]
@@ -93,11 +93,14 @@ def test_api_docs_rate_limits_match_canonical_commercial_contract():
             rf"<td>HTTP 429</td>"
         )
         assert re.search(pattern, docs, re.I | re.S), (
-            f"{label} API docs quota drift: expected "
-            f"{daily}/day and {per_min}/minute from commercial-contract.json"
+            f"{label} API docs quota or entitlement drift: expected "
+            f"{daily}/day and {per_min}/minute from commercial-contract.json, "
+            f"endpoint copy {endpoint_copy!r}, and HTTP 429"
         )
 
     assert not re.search(r"<td>Unlimited</td>", docs, re.I)
+    assert not re.search(r"<td>All endpoints(?: \+ SIEM)?</td>", docs, re.I)
+    assert not re.search(r"<td>All \+ Multi-tenant</td>", docs, re.I)
 
 
 def test_pricing_structured_data_does_not_publish_unlimited_api_access():
