@@ -447,7 +447,18 @@
       if (summary.endsWith(PAYWALL_TEASER_SUFFIX)) return summary;
       return `${summary} ${confText} ${actionText}`;
     }
-    return `No source-grounded per-advisory AI narrative is available. ${confText} ${actionText}`;
+    // Preserve a specific, supported category resolved from first-party
+    // feed tags when the FREE view has no paid AI summary.  Classification
+    // is NOT an observed intrusion, confirmed exploitation or attribution.
+    const recordedCategory = _str(threatCategory, "").trim();
+    const supportedCategories = new Set([
+      "Phishing", "Ransomware", "Malware", "Vulnerability", "APT",
+      "Supply Chain Attack", "Remote Code Execution",
+    ]);
+    const categoryContext = supportedCategories.has(recordedCategory)
+      ? ` Recorded advisory category: ${recordedCategory} (metadata classification only; not verified attack activity).`
+      : "";
+    return `No source-grounded per-advisory AI narrative is available.${categoryContext} ${confText} ${actionText}`;
   }
 
   /* ── PAYWALL FEATURE LIST ──────────────────────────────────────────────── */
