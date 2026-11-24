@@ -26,7 +26,18 @@
 })(typeof window !== "undefined" ? window : this, function () {
 
   /* ── SAFE ACCESSORS ────────────────────────────────────────────────────── */
-  function _str(val, fallback)  { if (val === null || val === undefined || val === "") return fallback !== undefined ? String(fallback) : ""; return String(val); }
+  function _str(val, fallback)  {
+    // Never render [object Object] (or invoke arbitrary object.toString())
+    // when a malformed upstream JSON field is presented as human-readable text.
+    function primitive(v) {
+      if (typeof v === "string" || typeof v === "boolean") return String(v);
+      if (typeof v === "number" && Number.isFinite(v)) return String(v);
+      return null;
+    }
+    const v = primitive(val);
+    if (v !== null && v !== "") return v;
+    return primitive(fallback) ?? "";
+  }
   function _num(val, fallback)  { const n = parseFloat(val); return isNaN(n) ? (fallback !== undefined ? Number(fallback) : 0) : n; }
   function _int(val, fallback)  { const n = parseInt(val, 10); return isNaN(n) ? (fallback !== undefined ? parseInt(fallback, 10) : 0) : n; }
   function _bool(val, fallback) { if (val === null || val === undefined) return fallback !== undefined ? Boolean(fallback) : false; return Boolean(val); }
@@ -385,57 +396,31 @@
   const PAYWALL_TEASER_SUFFIX = " [Full AI analysis requires Pro]";
 
   function buildAiVerdict(aiSummary, severity, socPriority, threatCategory, aiConfidence) {
-    const sev  = normalizeSeverity(severity);
-    const soc  = normalizeSocPriority(socPriority);
-    const cat  = _str(threatCategory, "default");
-    const type = _str(threatCategory, "default");
+    // SOC priority is a triage rank, not an observed incident, confirmed KEV,
+    // target attribution, exploitation clock or customer-specific patch SLA.
+    const soc = normalizeSocPriority(socPriority);
     const conf = _int(aiConfidence, 0);
-
-    // Pick the analyst narrative for this category+severity
-    const narrativeMap = VERDICT_NARRATIVE[type] || VERDICT_NARRATIVE["default"];
-    const narrative    = narrativeMap[sev]        || narrativeMap["MEDIUM"] || narrativeMap["LOW"];
-
-    // Action recommendation suffix keyed to SOC priority
-    const socSuffix = {
-      P0: "EMERGENCY: Confirmed active exploitation. Activate incident response immediately. Patch or apply mitigations now, do not wait for a maintenance window.",
-      P1: "Immediate incident response activation required. Escalate to CISO. Implement emergency mitigations now.",
-      P2: "Urgent investigation required within 4 hours. Assign incident owner. Implement compensating controls pending patch.",
-      P3: "Active monitoring and detection tuning advised. Schedule patch within 30-day SLA. Review exposure in affected systems.",
-      P4: "Log, monitor, and track. No immediate action required. Include in next vulnerability management cycle.",
-      UNKNOWN: "SOC priority has not yet been determined for this item. Review severity and available evidence directly -- do not assume low urgency.",
+    const action = {
+      P0: "P0 PRIORITY REVIEW: Verify current CISA KEV, vendor remediation and owned-asset exposure immediately; initiate incident response only for observed compromise evidence.",
+      P1: "P1 URGENT REVIEW: Validate affected versions and attack preconditions, prioritise reachable customer assets and apply vendor mitigations through the approved change process.",
+      P2: "P2 EXPOSURE REVIEW: Verify the source, affected assets, available controls and remediation owner; escalate when observed evidence supports it.",
+      P3: "P3 PLANNED REVIEW: Check source-supported affected versions and exploit indicators; set remediation dates under the customer's vulnerability-management policy.",
+      P4: "P4 TRACKING: Maintain source and asset monitoring. Reprioritise if CISA KEV, exposure or incident evidence changes.",
+      UNKNOWN: "SOC PRIORITY UNVERIFIED: Check the original advisory and local exposure before assigning an operational SLA.",
     };
-    const actionSuffix = socSuffix[soc] || socSuffix["UNKNOWN"];
+    const actionText = action[soc] || action.UNKNOWN;
+    const confText = Number.isFinite(conf) && conf > 0 && conf <= 100
+      ? `Recorded model confidence indicator: ${conf}/100 (calibration and evidence not independently verified).`
+      : "Calibrated model confidence evidence is unavailable.";
 
-    // Confidence context
-    const confContext = conf >= 80 ? "High-confidence intelligence basis."
-                      : conf >= 50 ? "Moderate-confidence intelligence basis — further validation advised."
-                      : "Limited intelligence signals — treat as early-warning indicator.";
-
-    // v148.0 P0 FIX: aiSummary -- the real, per-item backend-generated AI
-    // analysis (specific EPSS%, risk score, SOC priority, MITRE mapping
-    // status for THIS item) -- was accepted as a parameter here but never
-    // once referenced in this function body. Every card silently fell back
-    // to one of the 28 generic narrative strings above, keyed only by
-    // category+severity -- confirmed live: every HIGH-severity
-    // "Vulnerability" card showed the exact same verdict text regardless of
-    // which CVE it actually was, while 100% of sampled live feed items
-    // carry a real, distinct apex_ai.ai_summary. Prefer it now.
     const summary = _str(aiSummary, "").trim();
     if (summary) {
-      // A FREE-tier-truncated summary already ends with its own natural
-      // cutoff + upsell hook (the exact PAYWALL_TEASER_SUFFIX literal) --
-      // appending more sentences after "requires Pro" would both read as
-      // broken (grammatically continuing past a cut-off mid-word) and
-      // undercut the paywall's own message. Render it verbatim in that
-      // case; renderAiVerdictPanel() (card_renderer.js) gives the marker
-      // its own highlighted styling.
-      if (summary.slice(-PAYWALL_TEASER_SUFFIX.length) === PAYWALL_TEASER_SUFFIX) {
-        return summary;
-      }
-      return `${summary} ${confContext} ${actionSuffix}`;
+      // Preserve the backend's explicit FREE-tier truncation and entitlement
+      // boundary; do not append any text past its canonical teaser marker.
+      if (summary.endsWith(PAYWALL_TEASER_SUFFIX)) return summary;
+      return `${summary} ${confText} ${actionText}`;
     }
-
-    return `${narrative} ${confContext} ${actionSuffix}`;
+    return `No source-grounded per-advisory AI narrative is available. ${confText} ${actionText}`;
   }
 
   /* ── PAYWALL FEATURE LIST ──────────────────────────────────────────────── */
