@@ -179,7 +179,7 @@ for adv in resp.json()["items"]:
     print(f"  CVSS: {adv.get('cvss_score')}  EPSS: {adv.get('epss_score')}%  IOCs: {adv.get('ioc_count',0)}")
 
 # Sigma rule export is a separate authenticated Pro+ endpoint:
-# GET /api/v1/export/sigma with X-API-Key from a paid subscription.</pre>
+# GET /api/sigma/bulk with X-API-Key from a paid subscription.</pre>
       <pre id="qs-js" class="qs-panel" style="margin:0;border:none;background:transparent;display:none;">const API_KEY = 'YOUR_ENTERPRISE_API_KEY'; // Only for authenticated Enterprise webhook operations.
 const BASE    = 'https://intel.cyberdudebivash.com/api';
 
@@ -233,7 +233,7 @@ $Base = "https://intel.cyberdudebivash.com/api"
 (Invoke-RestMethod "$Base/feed?limit=10&severity=CRITICAL").items |
   ForEach-Object { Write-Host "[$($_.severity)] $($_.title) CVSS:$($_.cvss_score)" }
 
-# Pro+ Sigma export: GET /api/v1/export/sigma with your paid X-API-Key.</pre>
+# Pro+ Sigma export: GET /api/sigma/bulk with your paid X-API-Key.</pre>
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 28px;">
       <a href="/upgrade.html?plan=pro&utm_source=api-docs&utm_medium=quickstart" style="display:inline-flex;align-items:center;gap:6px;background:#00d4aa;color:#020a14;font-family:monospace;font-size:11px;font-weight:800;letter-spacing:1px;padding:8px 18px;border-radius:4px;text-decoration:none;">GET PRO API KEY</a>
@@ -404,14 +404,14 @@ token = YOUR_API_KEY</pre>
   -o iocs.csv</pre>
 
     <h2 id="export-sigma">Sigma Detection Rules <span class="tag req" style="font-size:.7rem">PRO+</span></h2>
-    <p>Download Sigma detection rules generated from threat feed IOCs and TTPs. 220+ rules covering all MITRE ATT&amp;CK techniques in the feed. Compatible with Splunk, Elastic, Sentinel, QRadar via <code>sigmac</code>.</p>
-    <div class="endpoint"><span class="method-badge get">GET</span><strong>/api/v1/export/sigma</strong></div>
+    <p>Download available Sigma detection rules from the threat intelligence feed. A paid PRO, Enterprise or MSSP credential is required. The server returns up to 50 rules for PRO or up to 2,000 for Enterprise and MSSP, subject to available matching content. Convert and validate rules for your SIEM before deployment.</p>
+    <div class="endpoint"><span class="method-badge get">GET</span><strong>/api/sigma/bulk</strong></div>
     <table><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
-      <tr><td>format</td><td>string</td><td>yaml</td><td>yaml | json | list</td></tr>
-      <tr><td>limit</td><td>integer</td><td>50</td><td>Rules to return (max 500 ENTERPRISE)</td></tr>
+      <tr><td>format</td><td>string</td><td>ndjson</td><td>ndjson | yaml (sigma is an alias for yaml)</td></tr>
+      <tr><td>severity</td><td>string</td><td>all</td><td>Optional severity filter (CRITICAL, HIGH, MEDIUM, LOW)</td></tr>
     </table>
-    <pre>curl -H "X-API-Key: YOUR_API_KEY" \
-  "https://intel.cyberdudebivash.com/api/v1/export/sigma?limit=100" \
+    <pre>curl --fail --show-error -H "X-API-Key: YOUR_API_KEY" \
+  "https://intel.cyberdudebivash.com/api/sigma/bulk?format=yaml" \
   -o rules.yml</pre>
 
     <h2 id="export-yara">YARA Detection Rules <span class="tag req" style="font-size:.7rem">PRO+</span></h2>
