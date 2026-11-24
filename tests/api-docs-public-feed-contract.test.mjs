@@ -107,13 +107,18 @@ test('authentication gate rejects universal key claims, missing authorization bo
 });
 
 test('Sigma documentation rejects nonexistent route, unsupported limit and incorrect format defaults', () => {
+  const start = html.indexOf('<h2 id="export-sigma">');
+  const end = html.indexOf('<h2 id="export-yara">', start);
+  assert.ok(start >= 0 && end > start, 'missing Sigma documentation section');
+  const section = html.slice(start, end);
   for (const [before, after] of [
     ['<strong>/api/sigma/bulk</strong>', '<strong>/api/v1/export/sigma</strong>'],
     ['<td>severity</td>', '<td>limit</td>'],
     ['<td>ndjson</td>', '<td>yaml</td>'],
     ['up to 50 rules for PRO or up to 2,000 for Enterprise and MSSP', 'unlimited rules'],
   ]) {
-    const mutated = html.replace(before, after);
+    assert.ok(section.includes(before), 'negative control must target Sigma: ' + before);
+    const mutated = html.slice(0, start) + section.replace(before, after) + html.slice(end);
     assert.notEqual(mutated, html, 'negative control must mutate the document');
     assert.ok(contractErrors(mutated).length > 0, before);
   }
