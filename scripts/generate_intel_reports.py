@@ -1577,7 +1577,7 @@ def _public_report_action_contract(severity: str, has_cve: bool,
     )
 
 
-def build_report_sections(item: dict) -> str:
+def build_report_sections(item: dict, *, render_metrics: dict | None = None) -> str:
     # RENDER LAYER SAFETY: NEVER assume data types  -  all fields coerced before use
     title       = str(item.get("title") or "Untitled Advisory")
     desc        = str(item.get("description") or title)
@@ -1699,6 +1699,11 @@ def build_report_sections(item: dict) -> str:
             log(f"APEX enrich warn (non-fatal): {_enrich_exc}", "warning")
 
     item["ttps"] = ttps   # item is the masked copy here -- renderers see validated techniques only
+    # Same post-mask, post-enrichment, pinned-ATT&CK validated set drives ALL
+    # public dossier TTP counts.  Pass only the numeric count, never gated
+    # technique IDs or private enrichment metadata, to the page header.
+    if render_metrics is not None:
+        render_metrics["validated_ttp_count"] = len(ttps)
     # Re-bind actor/campaign after enrichment (item is the masked copy — safe)
     actor       = str(item.get("actor_cluster") or item.get("actor_tag") or item.get("primary_actor") or "UNATTRIBUTED")
     campaign    = item.get("campaign_id") or item.get("campaign") or "UNCLASSIFIED"
@@ -2459,7 +2464,8 @@ def render_report(item: dict, public_prefix: str) -> str:
     _yyyy, _mm = iso_path(item.get("processed_at") or item.get("timestamp") or utc_now_iso())
     report_url = f"{public_prefix.rstrip('/')}/reports/{_yyyy}/{_mm}/{intel_id}.html"
 
-    sections_html = build_report_sections(item)
+    _render_metrics: dict = {}
+    sections_html = build_report_sections(item, render_metrics=_render_metrics)
 
     # ── Pre-computed display variables for god-mode template (no backslash in f-string) ──
     # Distinguish qualified IOC scoring from overall intelligence confidence.
@@ -2478,7 +2484,7 @@ def render_report(item: dict, public_prefix: str) -> str:
         "No validated IOC confidence evidence available; no default assigned"
     )
     _ioc_list    = item.get("iocs") or []
-    _ttp_list    = (item.get("apex_ai") or {}).get("ttps") or item.get("ttps") or []
+    _ttp_count   = _render_metrics["validated_ttp_count"]
     _cvss_disp   = str(_cvss_resolved) if _cvss_resolved is not None else "N/A"
     _epss_disp   = str(_epss_resolved) if _epss_resolved is not None else "N/A"
     _epss_pct    = "%" if _epss_resolved is not None else ""
@@ -2598,7 +2604,7 @@ def render_report(item: dict, public_prefix: str) -> str:
     <span>EPSS: <strong>{_epss_disp}{_epss_pct}</strong></span>
     <span>IOC observables: <strong>{len(_ioc_list)}</strong></span>
     <span>Validated IOCs: <strong>{_ioc_validated_hdr}</strong></span>
-    <span>TTPs: <strong>{len(_ttp_list)}</strong></span>
+    <span>TTPs: <strong>{_ttp_count}</strong></span>
     <span>KEV: <strong>{_kev_disp}</strong></span>
   </div>
   {_conf_strip}
