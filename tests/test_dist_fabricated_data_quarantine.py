@@ -18,6 +18,7 @@ patterns those pages used. Local files only.
 """
 import importlib.util
 import re
+import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -136,3 +137,17 @@ def test_private_pro_bundle_excluded_without_removing_public_neighbors(tmp_path)
 def test_private_pro_boundary_runs_before_deployment_manifest():
     src = (REPO / "scripts" / "build_dist_artifact.py").read_text(encoding="utf-8")
     assert src.index('if (DIST_DIR / "api/v1/intel/latest_pro.json").exists():') < src.index("# ── 7. Build deployment manifest")
+
+
+def test_private_pro_runtime_bundle_is_ignored_and_not_tracked():
+    path = "api/v1/intel/latest_pro.json"
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", path], cwd=REPO,
+        capture_output=True, text=True, check=True,
+    )
+    assert not tracked.stdout.strip(), "Private runtime bundle must not be tracked"
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--no-index", "-q", "--", path], cwd=REPO,
+        capture_output=True, text=True,
+    )
+    assert ignored.returncode == 0, "Private runtime bundle must be gitignored"
