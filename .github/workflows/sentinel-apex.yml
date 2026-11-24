@@ -3567,6 +3567,9 @@ jobs:
           # Preserve the uploader's fail-before-PUT behavior and fail this job,
           # rather than marking a refused PRO write as a successful release.
           set -euo pipefail
+          # Git persistence/recovery occurs after the initial integrity gate.
+          # Recheck the exact runtime artifacts before the mandatory final PUT.
+          python3 scripts/validate_api_manifests.py
           python3 scripts/r2_resync_manifests.py
 
       # -----------------------------------------------------------------------

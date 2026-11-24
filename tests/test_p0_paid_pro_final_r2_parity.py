@@ -209,3 +209,18 @@ def test_legacy_free_only_stage_keeps_nonfatal_unexpected_error_policy(capsys):
             resync.handle_unexpected_main_error(RuntimeError("synthetic free-only error"))
     assert exc.value.code == 0
     assert "unexpected error" in capsys.readouterr().out
+
+
+def test_final_r2_rechecks_generated_manifest_integrity_after_git_persistence():
+    """Prevent stale or changed bundle bytes from crossing the final write gate."""
+    workflow = (Path(__file__).resolve().parents[1] /
+                ".github/workflows/sentinel-apex.yml").read_text(encoding="utf-8")
+    stage = workflow.split(
+        '- name: "STAGE 4.1 - Final R2 Full Sync', 1
+    )[1].split('P0 FIX: Upload Intel State to R2', 1)[0]
+    commands = [line.strip() for line in stage.splitlines()]
+    gate = "python3 scripts/validate_api_manifests.py"
+    upload = "python3 scripts/r2_resync_manifests.py"
+    assert commands.count(gate) == 1
+    assert commands.index("set -euo pipefail") < commands.index(gate)
+    assert commands.index(gate) + 1 == commands.index(upload)
