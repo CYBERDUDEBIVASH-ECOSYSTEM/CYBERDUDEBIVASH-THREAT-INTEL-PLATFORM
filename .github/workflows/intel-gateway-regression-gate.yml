@@ -81,6 +81,8 @@ on:
       - 'scripts/build_dist_artifact.py'
       - 'js/apex-status-model.js'
       - 'js/card_renderer.js'
+      - 'js/api_adapter.js'
+      - 'js/__tests__/**'
       # ATT&CK reference: dashboard-contract.test.js checks the generated
       # technique->tactic table against it.
       - 'data/attck/**'
@@ -135,6 +137,14 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
+
+      # P0 dashboard customer-claim truth: run the REAL adapter tests on every
+      # pull request and on main whenever adapter JS changes. Reuse this
+      # existing runner; no paid CI service, network calls or deployments.
+      - name: "P0 customer advisory adapter evidence and type regressions (offline)"
+        run: |
+          node --check js/api_adapter.js
+          node --test js/__tests__/api_adapter.evidence_truth.test.js js/__tests__/api_adapter.soc_priority.test.js tests/p0-dashboard-impact-truth.test.cjs
 
       # Manual production release is NOT a push side effect: reject workflow
       # drift back to auto-deploy, default-env fallback or cancel-on-upload.
