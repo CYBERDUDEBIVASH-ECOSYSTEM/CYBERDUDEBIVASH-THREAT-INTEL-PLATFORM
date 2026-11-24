@@ -35,7 +35,7 @@ VERSION  = 'v150.0'
 
 violations = []
 passed     = 0
-total      = 6
+total      = 0
 
 
 def now_iso():
@@ -48,7 +48,8 @@ def sha256_file(path):
 
 
 def check(name, ok, msg_pass='', msg_fail=''):
-    global passed
+    global passed, total
+    total += 1
     if ok:
         passed += 1
         print(f'  [PASS] {name}{": " + msg_pass if msg_pass else ""}', flush=True)
@@ -116,17 +117,24 @@ except (FileNotFoundError, json.JSONDecodeError) as e:
     registry = None
 
 # ── Check 5: Checksum consistency ────────────────────────────────────────────
-print('\n[5] Checksum consistency (manifest sha256 == file sha256)', flush=True)
+print('\n[5] Checksum consistency (registry == embedded == unsigned payload SHA-256)', flush=True)
 if registry and os.path.exists(latest_path):
     try:
-        actual_sha = sha256_file(latest_path)
-        # The sha256 in the file itself includes the hash field, so we compare
-        # against the registry's recorded sha256 for latest
-        recorded = registry.get('bundles', {}).get('latest', {}).get('sha256', '')
-        # For the file-level check: just verify the file is parseable and non-empty
+        # The producer hashes compact UTF-8 JSON BEFORE adding sha256.
+        # Reconstruct that exact unsigned payload without changing the file.
+        with open(latest_path, 'r', encoding='utf-8') as f:
+            signed = json.load(f)
+        unsigned = dict(signed)
+        embedded = unsigned.pop('sha256', None)
+        actual_sha = hashlib.sha256(json.dumps(
+            unsigned, ensure_ascii=False, separators=(',', ':')
+        ).encode('utf-8')).hexdigest()
+        recorded = registry.get('bundles', {}).get('latest', {}).get('sha256')
         sz = os.path.getsize(latest_path)
-        check('latest.json checksum + size valid', sz > 100,
-              f'{sz:,} bytes, sha256={actual_sha[:16]}...', f'size={sz} too small')
+        check('latest.json checksum + size valid',
+              sz > 100 and embedded == recorded == actual_sha,
+              f'{sz:,} bytes, payload sha256={actual_sha[:16]}...',
+              'bundle size or embedded/registry/payload digest mismatch')
     except Exception as e:
         check('latest.json checksum + size valid', False, msg_fail=str(e))
 else:
