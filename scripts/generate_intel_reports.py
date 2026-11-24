@@ -2012,7 +2012,7 @@ def build_report_sections(item: dict) -> str:
             "from the advisory text (analyst inference, not observed adversary activity).</li>"
             f"<li><strong>Privilege context:</strong> Exploit path requires {_h(priv_req)} privileges.</li>"
             f"<li><strong>Indicators:</strong> {_di.ioc_count_phrase(ioc_count, ioc_validated)} at analysis time.</li>"
-            f"<li><strong>KEV status:</strong> {'Actively exploited - CISA KEV confirmed.' if kev else 'Not presently on CISA KEV.'}</li>"
+            f"<li><strong>KEV status:</strong> {'Actively exploited - CISA KEV confirmed.' if kev else 'CISA KEV listing not verified in this advisory record; review each CVE against the current CISA catalog.'}</li>"
             f"<li><strong>Threat actor:</strong> "
             + (f"internal cluster label <strong>{_h(actor)}</strong> (not a verified attribution)."
                if not _is_real_attribution(actor) else f"cluster <strong>{_h(actor)}</strong>.")
@@ -2182,17 +2182,25 @@ def build_report_sections(item: dict) -> str:
     # Use _had_real_campaign (captured before masking) rather than
     # re-deriving it from the now-masked campaign/item fields.
     if _had_real_campaign:
+        # A campaign field alone does not establish independent attribution.
+        # Do not claim a corroborated multi-stage campaign or leak its value.
         _s12_body = (
-            "<div class='callout'><strong>Campaign correlation confirmed.</strong> "
-            "This advisory has been linked to a tracked, multi-stage campaign. "
-            f"APEX correlates {len(ttps)} ATT&amp;CK techniques and {ioc_count} "
-            "IOC observables across this cluster. Full phase analysis, actor linkage, and "
-            "IOC clustering are an Enterprise entitlement — available via the "
-            "enterprise API.</div>"
+            "<div class='callout'><strong>CAMPAIGN REFERENCE PRESENT.</strong> "
+            "The source record contains a campaign label or relationship metadata. "
+            "This public dossier does not independently establish multi-stage "
+            "attribution, campaign activity or cross-advisory correlation. "
+            "Where corroborated evidence exists, additional details require "
+            "authenticated Enterprise access.</div>"
         )
-        sections.append(_section(12, "Campaign Intelligence", _s12_body))
-    # else: skip section entirely — no hollow placeholder shown to customer (GAP-022)
-
+    else:
+        # The contents link #s12 must lead to a real and truthful section.
+        _s12_body = (
+            "<div class='callout'><strong>CAMPAIGN NOT ESTABLISHED.</strong> "
+            "No verified campaign relationship is supplied for this advisory. "
+            "Do not infer actor identity, victim targeting or a multi-stage "
+            "operation solely from a CVE or vulnerability class.</div>"
+        )
+    sections.append(_section(12, "Campaign Intelligence", _s12_body))
     # ── S13: Affected Systems ──────────────────────────────────────────────
     if affected:
         aff_list = "".join(f"<li><code>{_h(a)}</code></li>" for a in (affected if isinstance(affected, list) else [affected]))
@@ -2217,8 +2225,9 @@ def build_report_sections(item: dict) -> str:
         f"<div class='callout'><strong>Regulatory note:</strong> {reg_note}</div>"
         + (f"<p>CISA lists this vulnerability as known-exploited (KEV); treat as a priority "
            f"remediation item.</p>" if kev else
-           "<p>Exploitation status: no CISA KEV listing was found in the data available to APEX at "
-           "analysis time. Absence from KEV does not establish that the flaw is not being exploited.</p>")
+           "<p>Exploitation status: CISA KEV membership was not verified by this advisory record. "
+           "Verify each CVE against the current CISA catalog. Missing verification is not proof of "
+           "non-exploitation or absence from the catalog.</p>")
         + ""
         "<ul>"
         "<li>Determine exposure first: match affected products/versions against your asset inventory "
