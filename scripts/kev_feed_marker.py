@@ -184,9 +184,10 @@ def main() -> int:
 
     for item in items:
         if not isinstance(item, dict):
-            # Fail closed at the schema gate, not by forging a KEV assertion.
-            log.error("Malformed non-object feed row; KEV verification unavailable")
-            continue
+            # Never report PASS on malformed input or partially publish rows.
+            # The feed is not written before this validation succeeds.
+            log.error("Malformed non-object feed row; blocking KEV publication")
+            return 1
 
         cves = _extract_cve(item)
         # Check fields independently: kev="NO" must never shadow a valid
