@@ -108,7 +108,7 @@ const allErrors = [];
 async function open(browser, opts = {}) {
   const context = await browser.newContext({ viewport: opts.viewport || { width: 1280, height: 900 } });
   const page = await context.newPage();
-  const rec = { errors: [], dialogs: [], subs: [], orders: [], statusCalls: [], feedCalls: [] };
+  const rec = { errors: [], dialogs: [], subs: [], orders: [], statusCalls: [], feedCalls: [], usageCalls: [] };
   page.on('pageerror', (e) => { rec.errors.push(String(e && e.message || e)); allErrors.push(String(e && e.message || e)); });
   page.on('dialog', async (d) => { rec.dialogs.push(d.message()); allDialogs.push(d.message()); await d.dismiss(); });
   await page.route('**/*', async (route) => {
@@ -141,6 +141,12 @@ async function open(browser, opts = {}) {
       const r = replies[Math.min(rec.statusCalls.length - 1, replies.length - 1)];
       if (r === 'network') return route.abort();
       return route.fulfill({ status: r.status || 200, contentType: 'application/json', body: JSON.stringify(r.body) });
+    }
+    if (p === '/api/account/usage') {
+      rec.usageCalls.push({ key: route.request().headers()['x-api-key'] || '', method: route.request().method(), query: u.search });
+      const reply = opts.usageReply || { status: 200, body: { tier: 'PRO', account: { customer_id: 'fixture-customer', credential_type: 'api_key' } } };
+      if (reply === 'network') return route.abort();
+      return route.fulfill({ status: reply.status, contentType: 'application/json', body: JSON.stringify(reply.body) });
     }
     if (p === '/api/feed') {
       rec.feedCalls.push(route.request().headers()['x-api-key'] || '');
@@ -358,7 +364,24 @@ const result = (page) => page.evaluate(() => ({
         r.actions === 'flex' && /Copy API key/.test(r.text) && /Test API/.test(r.text) && /Open Cyber Watchdog/.test(r.text) && /API docs/.test(r.text) && /Billing Center/.test(r.text), r.text);
       await a.page.click('#activation-test-api');
       await a.page.waitForFunction(() => /key works/.test(document.getElementById('activation-test-result').textContent), null, { timeout: 5000 });
-      check('ACTIVE: Test API sends the new key to the API', a.rec.feedCalls.length === 1 && a.rec.feedCalls[0] === KEY);
+      check('ACTIVE: Test API authenticates the new key without using the public feed', a.rec.usageCalls.length === 1 && a.rec.usageCalls[0].key === KEY && a.rec.usageCalls[0].method === 'GET' && a.rec.usageCalls[0].query === '' && a.rec.feedCalls.length === 0);
+      for (const [label, reply] of [
+        ['invalid key', { status: 401, body: { error: 'invalid_key' } }],
+        ['revoked or denied key', { status: 403, body: { error: 'denied' } }],
+        ['FREE account', { status: 200, body: { tier: 'FREE', account: { customer_id: 'fixture-customer', credential_type: 'api_key' } } }],
+        ['wrong paid plan', { status: 200, body: { tier: 'ENTERPRISE', account: { customer_id: 'fixture-customer', credential_type: 'api_key' } } }],
+        ['session instead of API key', { status: 200, body: { tier: 'PRO', account: { customer_id: 'fixture-customer', credential_type: 'jwt' } } }],
+        ['public feed-shaped 200', { status: 200, body: { items: [] } }],
+        ['service unavailable', { status: 503, body: { error: 'unavailable' } }],
+        ['network failure', 'network'],
+      ]) {
+        a.opts.usageReply = reply;
+        await a.page.click('#activation-test-api');
+        await a.page.waitForFunction(() => !document.getElementById('activation-test-api').disabled && /verification (not confirmed|unavailable)/.test(document.getElementById('activation-test-result').textContent), null, { timeout: 5000 });
+        const message = await a.page.locator('#activation-test-result').textContent();
+        check('ACTIVE: rejects ' + label + ' without leaking the credential', !/key works/.test(message) && !message.includes(KEY), message);
+      }
+      check('ACTIVE: negative checks never use the public feed', a.rec.feedCalls.length === 0 && a.rec.usageCalls.length === 9);
       const snip = await a.page.evaluate(() => { const s = document.getElementById('onboard-snippets'); return { hidden: s.hidden, text: s.innerText }; });
       check('ACTIVE: first-request snippets read the key from the environment, never embed it', !snip.hidden && /SENTINEL_APEX_API_KEY/.test(snip.text) && !snip.text.includes(KEY));
       check('ACTIVE: no "instant" claim, no page error', !/INSTANT/i.test(r.text) && a.rec.errors.length === 0, a.rec.errors.join(' | '));

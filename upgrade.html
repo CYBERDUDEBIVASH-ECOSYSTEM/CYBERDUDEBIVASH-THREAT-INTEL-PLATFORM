@@ -425,9 +425,9 @@ footer a { color: var(--text-dim); }
       <div id="onboard-snippets" class="snippets" hidden>
         <p class="ref-label">FIRST REQUEST (key read from an environment variable, never pasted into code)</p>
         <pre>export SENTINEL_APEX_API_KEY='paste-your-key-here'
-curl -H "X-API-Key: $SENTINEL_APEX_API_KEY" https://intel.cyberdudebivash.com/api/feed</pre>
+curl -H "X-API-Key: $SENTINEL_APEX_API_KEY" https://intel.cyberdudebivash.com/api/account/usage</pre>
         <pre>import os, requests
-resp = requests.get("https://intel.cyberdudebivash.com/api/feed",
+resp = requests.get("https://intel.cyberdudebivash.com/api/account/usage",
                     headers={"X-API-Key": os.environ["SENTINEL_APEX_API_KEY"]})
 print(resp.status_code)</pre>
       </div>
@@ -1118,23 +1118,39 @@ function showRazorpaySuccess(apiKey, proof) {
   var copyBtn = byId('activation-copy-key');
   if (copyBtn) copyBtn.onclick = function () { copyText(apiKey, copyBtn); };
   var testBtn = byId('activation-test-api');
-  if (testBtn) testBtn.onclick = function () { testApiKey(apiKey, testBtn); };
+  if (testBtn) testBtn.onclick = function () { testApiKey(apiKey, testBtn, proof.tier); };
   var snippets = byId('onboard-snippets');
   if (snippets) snippets.hidden = false;
 }
 
-// One real authenticated request with the new key; only the HTTP outcome
-// is shown, never the key.
-function testApiKey(apiKey, btn) {
+// Verify the newly provisioned credential against the authenticated account
+// contract, not the keyless public feed. Never display the account payload.
+function testApiKey(apiKey, btn, expectedTier) {
   var out = byId('activation-test-result');
   if (btn) btn.disabled = true;
   if (out) out.textContent = 'Testing…';
-  fetch('/api/feed', { headers: { 'X-API-Key': apiKey } })
+  var expected = String(expectedTier || '').toUpperCase();
+  fetch('/api/account/usage', {
+    headers: { 'X-API-Key': apiKey },
+    credentials: 'omit', cache: 'no-store', redirect: 'error'
+  })
     .then(function (r) {
-      if (out) out.textContent = r.ok ? '✔ API responded ' + r.status + ' — your key works.'
-                                      : 'API responded ' + r.status + '. If this persists, contact support with your reference.';
+      if (r.status !== 200) {
+        if (out) out.textContent = 'API key verification not confirmed (HTTP ' + r.status + '). If this persists, contact support with your reference.';
+        return;
+      }
+      return r.json().then(function (data) {
+        var account = data && data.account;
+        var verified = ['PRO', 'ENTERPRISE', 'MSSP'].indexOf(expected) !== -1 &&
+          data && data.tier === expected && account &&
+          account.credential_type === 'api_key' &&
+          typeof account.customer_id === 'string' && account.customer_id.length > 0;
+        if (out) out.textContent = verified
+          ? '✔ Paid account verified — your key works.'
+          : 'API key verification not confirmed for the purchased plan. Contact support with your reference.';
+      });
     })
-    .catch(function () { if (out) out.textContent = 'Network error while testing. Please try again.'; })
+    .catch(function () { if (out) out.textContent = 'API key verification unavailable. Please try again.'; })
     .then(function () { if (btn) btn.disabled = false; });
 }
 
