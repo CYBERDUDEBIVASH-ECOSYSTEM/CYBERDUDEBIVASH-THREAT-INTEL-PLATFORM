@@ -591,8 +591,14 @@
       };
     }
 
-    const stixId    = _str(raw.stix_id, "intel--" + _str(raw.id, "unknown"));
-    const stixShort = stixId.substring(0, 16);
+    // P0-04: the feed's canonical internal report key is already intel--...
+    // Never prefix it again (previously produced intel--intel--<key>).
+    // Do not fabricate a STIX 2.1 object ID; this legacy adapter property
+    // carries the full advisory reference for existing card/copy consumers.
+    // The renderer calls it "Advisory reference", not a validated STIX object.
+    const stixId    = _str(raw.stix_id, _str(raw.id, ""));
+    const stixShort = stixId.startsWith("intel--") ? stixId
+                    : stixId ? stixId.substring(0, 16) : "ID unavailable";
     const sev       = normalizeSeverity(raw.severity);
     const sevColors = getSeverityColors(sev);
     // P0 FIX: raw.confidence is stored as a 0-1 fraction but was being read
