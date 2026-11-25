@@ -305,6 +305,8 @@ jobs:
         env:
           INTEL_STATE: ${{ steps.gate_a.outputs.intelligence_state }}
           INTEL_HEALTHY: ${{ steps.gate_a.outputs.intelligence_healthy }}
+          # Free-text workflow_dispatch input: data, never inline shell source.
+          OPERATOR_NOTES: ${{ github.event.inputs.operator_notes || 'N/A' }}
         run: |
           echo "============================================================"
           echo "SENTINEL APEX -- DEPLOYMENT CERTIFICATION"
@@ -314,7 +316,7 @@ jobs:
           echo "Commit SHA:   ${{ github.event.workflow_run.head_sha || github.sha }}"
           echo "Reason:       ${{ github.event.inputs.reason || 'N/A (automatic trigger)' }}"
           echo "Deploy Type:  ${{ github.event.inputs.deployment_type || 'N/A (automatic trigger)' }}"
-          echo "Notes:        ${{ github.event.inputs.operator_notes || 'N/A' }}"
+          echo "Notes:        ${OPERATOR_NOTES}"
           echo "Validated At: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "Status:       CERTIFIED OPERATIONAL"
           echo "============================================================"

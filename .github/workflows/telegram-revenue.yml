@@ -70,8 +70,10 @@ jobs:
           python-version: '3.12'
 
       - name: " Validate secrets"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
-          if [ -z "${{ secrets.TELEGRAM_BOT_TOKEN }}" ]; then
+          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
             echo "::warning::TELEGRAM_BOT_TOKEN not set -- skipping Telegram dispatch."
             echo "SKIP_TG=true" >> $GITHUB_ENV
           else

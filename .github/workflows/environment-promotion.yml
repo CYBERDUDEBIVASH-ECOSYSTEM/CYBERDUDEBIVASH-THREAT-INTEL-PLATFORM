@@ -125,9 +125,17 @@ jobs:
 
       - name: "Log change to governance ledger"
         timeout-minutes: 1
+        env:
+          # workflow_dispatch values are data, never inline shell source. The JSON is built with json.dumps
+          # (same key order and separators as before), so free text can neither run code nor break the JSON.
+          PROMOTE_FROM: ${{ github.event.inputs.promote_from }}
+          PROMOTE_TO: ${{ github.event.inputs.promote_to }}
+          CHANGE_SUMMARY: ${{ github.event.inputs.change_summary }}
+          RISK_LEVEL: ${{ steps.risk.outputs.level }}
         run: |
+          META=$(python3 -c 'import json, os; print(json.dumps({"from": os.environ["PROMOTE_FROM"], "to": os.environ["PROMOTE_TO"], "summary": os.environ["CHANGE_SUMMARY"], "risk": os.environ["RISK_LEVEL"]}, ensure_ascii=False))')
           python3 scripts/change_manager.py audit-log "PROMOTION_INITIATED" \
-            --meta "{\"from\": \"${{ github.event.inputs.promote_from }}\", \"to\": \"${{ github.event.inputs.promote_to }}\", \"summary\": \"${{ github.event.inputs.change_summary }}\", \"risk\": \"${{ steps.risk.outputs.level }}\"}" 2>&1 || true
+            --meta "$META" 2>&1 || true
 
   # ============================================================
   # GATE 2: RELEASE CERTIFICATION
@@ -227,12 +235,14 @@ jobs:
 
     steps:
       - name: "Print promotion report"
+        env:
+          CHANGE_SUMMARY: ${{ github.event.inputs.change_summary }}
         run: |
           echo "============================================================"
           echo "SENTINEL APEX -- ENVIRONMENT PROMOTION REPORT"
           echo "============================================================"
           echo "Promotion:     ${{ github.event.inputs.promote_from }} --> ${{ github.event.inputs.promote_to }}"
-          echo "Summary:       ${{ github.event.inputs.change_summary }}"
+          echo "Summary:       ${CHANGE_SUMMARY}"
           echo "Risk Level:    ${{ needs.change-management.outputs.risk_level }}"
           echo "Timestamp:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "============================================================"
