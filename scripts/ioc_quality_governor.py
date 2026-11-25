@@ -102,7 +102,7 @@ _ARTIFACT_PATTERNS = [
 # Domain allowlist suffixes that are common false positives when very short
 _COMMON_FP_DOMAINS = {
     "example.com", "test.com", "localhost", "localhost.localdomain",
-    "0.0.0.0", "127.0.0.1", "255.255.255.255",
+    "0.0.0.0", "127.0.0.1", "255.255.255.255",  # nosec B104 -- IOC exclusion data, not a socket bind.
 }
 
 # Private IP ranges

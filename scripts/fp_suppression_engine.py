@@ -56,7 +56,7 @@ KNOWN_GOOD_DOMAINS = {
 }
 
 KNOWN_GOOD_IPS = {
-    "127.0.0.1","::1","0.0.0.0",
+    "127.0.0.1","::1","0.0.0.0",  # nosec B104 -- IOC exclusion data, not a socket bind.
     "8.8.8.8","8.8.4.4","1.1.1.1","1.0.0.1",  # DNS
     "169.254.169.254",  # Cloud metadata — allowlisted for security scanners only
 }

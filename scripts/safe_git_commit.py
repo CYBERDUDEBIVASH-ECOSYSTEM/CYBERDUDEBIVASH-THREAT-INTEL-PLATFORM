@@ -156,7 +156,24 @@ def publish_metadata_pr(token: str, repository: str) -> dict:
         raise RuntimeError("Cannot establish generated commit identity; publication stopped")
     push = run_git("push", "origin", f"HEAD:refs/heads/{branch}")
     if push.returncode:
-        raise RuntimeError("Generated metadata branch push rejected; no main write attempted")
+        # Never print raw stderr: git may embed a credential-bearing remote URL.
+        # Classify only fixed, non-secret categories; unknown errors stay blocked.
+        diagnostic = (push.stderr or "").lower()
+        if "gh013" in diagnostic or "repository rule violations" in diagnostic:
+            reason = "REPOSITORY_RULE_REJECTED"
+        elif "permission" in diagnostic or "403" in diagnostic or "denied" in diagnostic:
+            reason = "TOKEN_OR_POLICY_FORBIDDEN"
+        elif "authentication failed" in diagnostic or "401" in diagnostic:
+            reason = "TOKEN_AUTHENTICATION_REJECTED"
+        elif "non-fast-forward" in diagnostic or "fetch first" in diagnostic:
+            reason = "REVIEW_BRANCH_CONFLICT"
+        elif "timed out" in diagnostic or "could not resolve host" in diagnostic or "connection reset" in diagnostic:
+            reason = "TRANSPORT_FAILURE"
+        else:
+            reason = "UNKNOWN_PUSH_FAILURE"
+        raise RuntimeError(
+            f"Generated metadata branch push rejected ({reason}); no main write attempted"
+        )
 
     # A successful push process is not sufficient persistence evidence. Read
     # the remote ref back and require the exact generated commit. This closes
@@ -199,7 +216,8 @@ def publish_metadata_pr(token: str, repository: str) -> dict:
             headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                      "Content-Type": "application/json", "X-GitHub-Api-Version": "2022-11-28"})
         try:
-            with urllib.request.urlopen(req, timeout=30) as response:
+            # req is constructed above from a fixed HTTPS GitHub API origin and validated repository.
+            with urllib.request.urlopen(req, timeout=30) as response:  # nosec B310 -- fixed HTTPS API URL.
                 return json.loads(response.read(1024 * 1024))
         except urllib.error.HTTPError as exc:
             # Never echo GitHub's raw body, token, request headers or transport
