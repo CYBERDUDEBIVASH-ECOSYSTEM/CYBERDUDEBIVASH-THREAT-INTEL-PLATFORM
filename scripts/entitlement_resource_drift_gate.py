@@ -58,7 +58,10 @@ RESOLVE_ENTITLEMENT_CALLSITE_FILES = [
 ]
 
 CASE_RE = re.compile(r'case\s+"([a-zA-Z0-9_]+)"\s*:')
-ENFORCEMENT_RESOURCES_RE = re.compile(r'ENTITLEMENT_ENFORCEMENT_RESOURCES\s*=\s*"([^"]*)"')
+ENFORCEMENT_RESOURCES_RE = re.compile(
+    r'^[ \t]*ENTITLEMENT_ENFORCEMENT_RESOURCES[ \t]*=[ \t]*"([^"\n]*)"[ \t]*(?:#[^\n]*)?$',
+    re.MULTILINE,
+)
 RESOLVE_ENTITLEMENT_CALL_RE = re.compile(r'resolveEntitlement\([^,]+,\s*[^,]+,\s*"([a-zA-Z0-9_]+)"')
 # Strips // line comments and /* */ block comments before the call-site scan
 # below (CodeRabbit review finding on PR #258: a comment mentioning
@@ -136,9 +139,12 @@ def _wrangler_sections() -> dict:
 
 
 def main() -> int:
-    if not REVENUE_ENFORCEMENT_JS.exists() or not WRANGLER_TOML.exists():
-        print("[entitlement-drift-gate] Required files not found -- skipping (non-fatal)")
-        return 0
+    required = [REVENUE_ENFORCEMENT_JS, WRANGLER_TOML, *RESOLVE_ENTITLEMENT_CALLSITE_FILES]
+    missing = [path for path in required if not path.is_file()]
+    if missing:
+        for path in missing:
+            print(f"[entitlement-drift-gate] FAIL -- required file missing: {path.relative_to(REPO_ROOT)}")
+        return 1
 
     defined = _defined_resources()
     print(f"[entitlement-drift-gate] {len(defined)} resource(s) defined in enforceTierGate(): "
@@ -149,6 +155,14 @@ def main() -> int:
           f"resolveEntitlement() callsite: {', '.join(sorted(live_callsites))}")
 
     sections = _wrangler_sections()
+    for name in ("vars", "env.production.vars"):
+        if name not in sections:
+            print(f"[entitlement-drift-gate] FAIL -- required [{name}] section missing")
+            return 1
+        declarations = ENFORCEMENT_RESOURCES_RE.findall(sections[name])
+        if len(declarations) != 1:
+            print(f"[entitlement-drift-gate] FAIL -- [{name}] requires exactly one explicit resource declaration")
+            return 1
     undefined_failures = []
     no_callsite_failures = []
     for section_name, section_text in sections.items():
