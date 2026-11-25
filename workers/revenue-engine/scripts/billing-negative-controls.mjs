@@ -75,7 +75,13 @@ const KR = "workers/intel-gateway/src/key-redemption.js";
 const CONTROLS = [
   // S28 billing canary safety.
   ["canary would create a test checkout on live keys", "deploy/billing-canary/canary-lib.mjs",
-    "  return !!(c && c.ok === false && /test mode/.test(String(c.detail || \"\")));", "  return !!c;"],
+    "  if (readiness?.verdict !== \"BLOCKED\" || !Array.isArray(readiness.checks)) return false;", "  return true;"],
+  ["canary counts unavailable cancellation (503) as an auth refusal", "deploy/billing-canary/canary-lib.mjs",
+    "  step(steps, \"cancel_requires_key\", cancel.status === 401,", "  step(steps, \"cancel_requires_key\", cancel.status === 401 || cancel.status === 503,"],
+  ["canary accepts deceptive Access redirects", "deploy/billing-canary/canary-lib.mjs",
+    "export function isTrustedAccessRedirect(location) {", "export function isTrustedAccessRedirect(location) {\n  return true;"],
+  ["canary continues checkout after unexpected key mode", "deploy/billing-canary/canary-lib.mjs",
+    "  if (!created || !steps[steps.length - 1].ok) return steps;", "  if (!created) return steps;"],
   ["canary counts a missing webhook secret (500) as a refusal", "deploy/billing-canary/canary-lib.mjs",
     "  step(steps, \"razorpay_webhook_refuses_bad_signature\", unsigned.status === 401,",
     "  step(steps, \"razorpay_webhook_refuses_bad_signature\", unsigned.status === 401 || unsigned.status === 500,"],
