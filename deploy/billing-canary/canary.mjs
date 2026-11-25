@@ -59,6 +59,8 @@ if (mode !== "public") {
   if (mode === "test-checkout") {
     if (!readinessProvesTestMode(admin.readiness)) out("LIVE_MODE_REFUSED", steps, EXIT.LIVE_MODE_REFUSED,
       { reason: "readiness does not prove a Razorpay test-mode key; the canary never creates a subscription on live keys" });
+    if (steps.some((s) => !s.ok)) out("FAIL", steps, EXIT.FAIL,
+      { reason: "Mandatory preflight failed; no checkout attempted", failed: steps.filter((s) => !s.ok).map((s) => s.step) });
     const email = process.env.CDB_BILLING_CANARY_EMAIL || `billing-canary+${runId}@example.com`;
     steps.push(...await runTestCheckout(http, { email }));
   }

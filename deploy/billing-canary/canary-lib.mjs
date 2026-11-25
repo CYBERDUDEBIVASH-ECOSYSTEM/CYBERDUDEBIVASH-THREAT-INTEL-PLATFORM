@@ -45,6 +45,17 @@ export function isMinimalRevenueHealth(body) {
     (typeof body.release_sha === "string" && /^[0-9a-f]{40}$/.test(body.release_sha));
 }
 
+export function isTrustedAccessRedirect(location) {
+  if (typeof location !== "string") return false;
+  try {
+    const url = new URL(location);
+    return url.protocol === "https:" && !url.username && !url.password && !url.port &&
+      /^[a-z0-9-]+\.cloudflareaccess\.com$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export async function runPublicChecks({ intel, revenue }) {
   const steps = [];
 
@@ -62,7 +73,7 @@ export async function runPublicChecks({ intel, revenue }) {
   step(steps, "readiness_requires_admin", ready.status === 401, { status: ready.status });
 
   const cancel = await intel("POST", "/api/v2/billing/subscriptions/cancel", { body: {} });
-  step(steps, "cancel_requires_key", cancel.status === 401 || cancel.status === 503, { status: cancel.status });
+  step(steps, "cancel_requires_key", cancel.status === 401, { status: cancel.status });
 
   const refund = await intel("POST", "/api/v2/billing/refunds/approve", { body: { request_id: "rfr_canary" } });
   step(steps, "refund_approval_requires_admin", refund.status === 401, { status: refund.status });
@@ -105,7 +116,7 @@ export async function runPublicChecks({ intel, revenue }) {
     response.status === 401 || response.status === 403 ||
     ([302, 303, 307, 308].includes(response.status) &&
       !!response.location &&
-      /^https:\/\/[^/]+\.cloudflareaccess\.com(?:[:/]|$)/i.test(response.location));
+      isTrustedAccessRedirect(response.location));
 
   const admin = await intel("GET", "/admin.html");
   step(steps, "admin_page_requires_access", adminAccessDenied(admin), { status: admin.status });
@@ -140,8 +151,10 @@ export async function runAdminChecks({ intel, revenue }, adminSecret, { requireR
 
 /** True only when readiness proves the deployment's Razorpay key is test-mode. */
 export function readinessProvesTestMode(readiness) {
-  const c = readiness && Array.isArray(readiness.checks) ? readiness.checks.find((x) => x.id === "razorpay_live_mode") : null;
-  return !!(c && c.ok === false && /test mode/.test(String(c.detail || "")));
+  if (readiness?.verdict !== "BLOCKED" || !Array.isArray(readiness.checks)) return false;
+  const matches = readiness.checks.filter((x) => x?.id === "razorpay_live_mode");
+  return matches.length === 1 && matches[0].ok === false &&
+    matches[0].detail === "Key is not a live-mode key (test mode): no real payment can be taken.";
 }
 
 /**
@@ -156,7 +169,7 @@ export async function runTestCheckout({ intel }, { email, tier = "PRO", cycle = 
   step(steps, "test_checkout_created_after_plan_price_check", created,
     { status: a.status, error: a.body?.error ?? null, subscription_prefix: created ? a.body.subscription_id.slice(0, 8) : null });
   step(steps, "test_checkout_uses_test_key", created && /^rzp_test_/.test(a.body.key_id || ""), { key_mode: created ? String(a.body.key_id || "").slice(0, 9) : null });
-  if (!created) return steps;
+  if (!created || !steps[steps.length - 1].ok) return steps;
   const b = await intel("POST", "/api/v2/billing/subscriptions/create", { body });
   step(steps, "test_checkout_retry_reuses_subscription", b.status === 200 && b.body?.subscription_id === a.body.subscription_id && b.body?.reused === true,
     { status: b.status, reused: b.body?.reused ?? null });
