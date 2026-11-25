@@ -30,6 +30,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -44,10 +45,37 @@ DEFAULT_BASE = "https://intel.cyberdudebivash.com"
 USER_AGENT = "SENTINEL-APEX-FreshnessGate/1.0 (+https://intel.cyberdudebivash.com)"
 
 
+def _https_origin(url: str) -> tuple[str, int]:
+    """Validate a configured HTTPS target and normalize its origin."""
+    if any(ord(char) <= 32 or ord(char) == 127 for char in url) or "\\" in url:
+        raise ValueError("invalid HTTPS target")
+    parsed = urllib.parse.urlsplit(url)
+    if (parsed.scheme != "https" or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.fragment):
+        raise ValueError("HTTPS target without credentials or fragment required")
+    port = parsed.port
+    if port == 0:
+        raise ValueError("invalid HTTPS port")
+    return parsed.hostname, 443 if port is None else port
+
+
+class _SameOriginHTTPSRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            if _https_origin(newurl) != _https_origin(req.full_url):
+                raise ValueError("cross-origin redirect")
+        except ValueError:
+            raise urllib.error.URLError("unsafe freshness-gate redirect rejected") from None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _get_json(url: str, timeout: float) -> tuple[int | None, object | None, str | None]:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Cache-Control": "no-cache"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        _https_origin(url)
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Cache-Control": "no-cache"})
+        opener = urllib.request.build_opener(_SameOriginHTTPSRedirect())
+        with opener.open(req, timeout=timeout) as resp:
             status, raw = resp.status, resp.read()
     except urllib.error.HTTPError as e:
         status, raw = e.code, e.read()
