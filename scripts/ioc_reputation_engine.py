@@ -49,6 +49,10 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -264,7 +268,7 @@ def _http_get(url: str, headers: Dict[str, str], timeout: int = 15) -> Tuple[int
     """
     try:
         req = urllib.request.Request(url, headers=headers, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             return resp.status, json.loads(raw)
     except urllib.error.HTTPError as e:

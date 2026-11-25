@@ -281,6 +281,10 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 ADR_DIR = ROOT / "docs" / "adr"
@@ -601,7 +605,7 @@ def check_ar000_regression() -> list[str]:
         try:
             req = urllib.request.Request(url, method="GET", headers={"User-Agent": "titan-governance-check/1.0"})
             try:
-                resp = urllib.request.urlopen(req, timeout=8)
+                resp = safe_urlopen(req, timeout=8)
                 status = resp.status
             except urllib.error.HTTPError as e:
                 status = e.code

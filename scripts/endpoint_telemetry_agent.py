@@ -7,7 +7,7 @@ Supports: Windows, Linux, macOS, Containers, Kubernetes, Cloud Workloads.
 Features: encrypted transport, heartbeat, offline queueing, tamper detection,
           tenant enrollment, policy distribution, rate limiting.
 """
-import os, sys, json, time, uuid, hashlib, hmac, socket, platform
+import os, sys, json, time, uuid, hashlib, hmac, socket, platform, tempfile
 import threading, logging, queue
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
@@ -27,7 +27,7 @@ class AgentConfig:
     batch_size:          int    = 100
     max_queue_size:      int    = 10_000
     rate_limit_eps:      int    = 500      # events/second
-    offline_queue_path:  str    = "/tmp/apex_agent_queue.json"
+    offline_queue_path:  str    = os.path.join(tempfile.gettempdir(), "apex_agent_queue.json")
     agent_id:            str    = field(default_factory=lambda: str(uuid.uuid4())[:12])
     platform:            str    = field(default_factory=platform.system)
     hostname:            str    = field(default_factory=socket.gethostname)
@@ -266,7 +266,7 @@ class TamperDetector:
 class OfflineQueueManager:
     """Persists events when gateway is unreachable."""
 
-    def __init__(self, path: str = "/tmp/apex_agent_queue.json"):
+    def __init__(self, path: str = os.path.join(tempfile.gettempdir(), "apex_agent_queue.json")):
         self._path = Path(path)
         self._memory_queue: List[Dict] = []
 

@@ -92,7 +92,7 @@ def test_w_group() -> None:
         return
 
     # W2: FileLock default timeout is 120s
-    lock = FileLock(Path(tempfile.mktemp()))
+    lock = FileLock(Path(tempfile.mkdtemp()) / "w2.lock")
     check(
         "W2: FileLock default timeout == 120.0s",
         lock._timeout == 120.0,

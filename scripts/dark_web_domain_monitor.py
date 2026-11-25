@@ -35,6 +35,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logger = logging.getLogger("CDB-DARKWEB-MONITOR")
 logging.basicConfig(
@@ -331,7 +335,7 @@ def send_telegram_alert(finding: Dict, domain: str, cfg: Dict) -> bool:
 
         req = urllib.request.Request(url, data=payload,
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with safe_urlopen(req, timeout=10) as resp:
             if resp.status == 200:
                 logger.info(f"Telegram alert sent: {domain} [{finding['severity']}]")
                 return True
@@ -375,7 +379,7 @@ def send_webhook_alert(finding: Dict, domain: str, cfg: Dict) -> bool:
                     webhook_url, data=payload_bytes, headers=headers, method="POST"
                 )
                 timeout = wc.get("timeout_sec", 10)
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                with safe_urlopen(req, timeout=timeout) as resp:
                     if 200 <= resp.status < 300:
                         logger.info(f"Webhook sent (attempt {attempt+1}): "
                                     f"{domain} [{finding['severity']}]")

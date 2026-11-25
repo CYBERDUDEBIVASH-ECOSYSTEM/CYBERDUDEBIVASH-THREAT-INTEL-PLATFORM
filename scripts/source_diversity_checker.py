@@ -11,6 +11,10 @@ from pathlib import Path
 from collections import defaultdict
 
 from p38_shared_validators import get_certification_feed, StaleFeedError
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 log = logging.getLogger("sentinel.source_diversity")
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -28,7 +32,7 @@ def _test_source(source):
     result = {"name": source["name"], "url": source["url"], "type": source["type"], "reachable": False, "status_code": None, "response_bytes": 0, "error": None}
     try:
         req = urllib.request.Request(source["url"], headers={"User-Agent": "SENTINEL-APEX/171 CTI-Monitor"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with safe_urlopen(req, timeout=8) as resp:
             result["status_code"] = resp.status
             result["reachable"] = resp.status == 200
             result["response_bytes"] = len(resp.read(2048))

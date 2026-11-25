@@ -18,7 +18,7 @@ from pathlib import Path
 
 
 MANIFEST_PATH = Path("data/stix/feed_manifest.json")
-OUTPUT_PATH = Path("/tmp/r2_sync_meta.json")
+OUTPUT_PATH = Path("/tmp/r2_sync_meta.json")  # nosec B108 -- fixed path shared with r2-data-sync.yml and r2_upload_verifier.py
 
 
 def count_advisories() -> int:
@@ -55,7 +55,7 @@ def main():
     }
 
     # Atomic write to /tmp
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", dir="/tmp")
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".json", dir=str(OUTPUT_PATH.parent))
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)

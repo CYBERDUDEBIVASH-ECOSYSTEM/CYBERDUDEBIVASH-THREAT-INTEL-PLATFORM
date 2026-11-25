@@ -35,6 +35,10 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 from typing import Any
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(level=logging.INFO, format="[OBS-EXPORTER] %(message)s")
 log = logging.getLogger("obs-exporter")
@@ -185,7 +189,7 @@ def push_to_grafana(metrics_text: str) -> bool:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with safe_urlopen(req, timeout=15) as resp:
             log.info("Grafana push successful: HTTP %d", resp.status)
             return True
     except urllib.error.HTTPError as e:

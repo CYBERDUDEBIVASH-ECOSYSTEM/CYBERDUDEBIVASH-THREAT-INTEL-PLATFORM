@@ -44,6 +44,10 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 log = logging.getLogger("sentinel.cve_scanner")
 
@@ -99,7 +103,7 @@ def _http_get(url: str, headers: Optional[Dict] = None, timeout: int = 15) -> Op
     try:
         req = urllib.request.Request(url, headers=headers or {})
         req.add_header("User-Agent", "CYBERDUDEBIVASH-SENTINEL-APEX/1.0 CVE-Scanner")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as exc:
         log.warning("[CVE-SCAN] HTTP %d for %s", exc.code, url[:80])

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-GOOD_HTML = Path('/tmp/index_good.html')
+GOOD_HTML = Path(tempfile.gettempdir()) / 'index_good.html'
 
 
 def _load_platform_version() -> str:

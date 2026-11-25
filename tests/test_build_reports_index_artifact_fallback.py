@@ -49,6 +49,8 @@ SCRIPT_DEPENDENCIES = (
     # Preserve its fail-closed publication semantics in the isolated fixture.
     "tlp_policy.py",
     "severity_epss_truth.py",
+    # severity_epss_truth fetches EPSS through the shared scheme-validating helper (Bandit B310 remediation).
+    "cdb_safe_http.py",
     "public_report_actor.py",
     "ioc_truth_engine.py",
     "attribution_evidence_engine.py",

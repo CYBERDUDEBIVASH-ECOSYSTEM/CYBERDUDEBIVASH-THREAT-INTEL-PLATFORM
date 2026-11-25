@@ -54,6 +54,10 @@ sys.path.insert(0, str(_REPO))
 
 from canonical_timestamp import parse_ts as _canonical_parse_ts  # noqa: E402
 from normalize_text import strip_markdown_artifacts as _strip_md  # noqa: E402
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -313,7 +317,7 @@ def _get_json(url: str, headers: Optional[Dict] = None, timeout: int = REQUEST_T
             "User-Agent": "CyberDudeBivash-SentinelAPEX/142.0 (Intel-Ingestor)",
             **(headers or {}),
         })
-        with _ur.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
             return json.loads(raw)
     except Exception as e:
@@ -331,7 +335,7 @@ def _get_text(url: str, headers: Optional[Dict] = None, timeout: int = REQUEST_T
             "User-Agent": "CyberDudeBivash-SentinelAPEX/142.0 (Intel-Ingestor)",
             **(headers or {}),
         })
-        with _ur.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except Exception as e:
         _last_http_reason_code = _classify_http_exception(e)
@@ -816,7 +820,7 @@ def ingest_urlhaus(feed_state: FeedState) -> List[Dict]:
                 "Auth-Key": ABUSECH_AUTH_KEY,
             },
         )
-        with _ur.urlopen(req, timeout=15) as resp:
+        with safe_urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
     except Exception as e:
         log.warning("[URLHAUS] Fetch failed: %s", e)

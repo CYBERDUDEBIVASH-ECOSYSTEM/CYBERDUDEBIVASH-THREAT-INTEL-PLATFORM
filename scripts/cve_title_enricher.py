@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 import urllib.request, urllib.error
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [CDB-CVE-TITLE] %(levelname)s %(message)s", datefmt="%H:%M:%S")
@@ -174,7 +178,7 @@ def _fetch_nvd(cve_id: str) -> Optional[dict]:
         headers["apiKey"] = NVD_API_KEY
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=NVD_TIMEOUT) as resp:
+        with safe_urlopen(req, timeout=NVD_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             vulns = data.get("vulnerabilities") or []
             if vulns:

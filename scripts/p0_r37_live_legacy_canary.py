@@ -6,6 +6,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 BASE = "https://intel.cyberdudebivash.com"
 ALIASES = ("/feed.json", "/latest.json")
@@ -99,7 +103,7 @@ def _request(url: str) -> tuple[int, bytes]:
         "User-Agent": "SENTINEL-APEX-P0-LEGACY-CANARY/1.0",
     })
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with safe_urlopen(request, timeout=20) as response:
             status = response.status
             body = response.read(MAX_BYTES + 1)
             headers = response.headers

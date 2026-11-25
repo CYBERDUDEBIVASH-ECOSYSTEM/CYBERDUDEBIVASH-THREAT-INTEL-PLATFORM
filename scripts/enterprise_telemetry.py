@@ -34,6 +34,10 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 REPO_ROOT     = pathlib.Path(__file__).resolve().parent.parent
 TELEMETRY_DIR = REPO_ROOT / "data" / "telemetry"
@@ -74,7 +78,7 @@ def probe_endpoint(url: str, samples: int = 3, timeout: int = 15) -> dict:
         t0 = time.monotonic()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "SENTINEL-APEX-TELEMETRY/1.0"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with safe_urlopen(req, timeout=timeout) as resp:
                 lat = int((time.monotonic() - t0) * 1000)
                 latencies.append(lat)
                 statuses.append(resp.status)

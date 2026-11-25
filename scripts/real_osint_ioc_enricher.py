@@ -52,6 +52,10 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 REPO          = Path(__file__).resolve().parent.parent
@@ -213,7 +217,7 @@ def _http_get(url: str, headers: Optional[Dict] = None,
         req.add_header("User-Agent", "CYBERDUDEBIVASH-SENTINEL-APEX/161.0 IOC-Enricher")
         if data:
             req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
             try:
                 return json.loads(body)

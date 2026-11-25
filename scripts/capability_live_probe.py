@@ -55,6 +55,10 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_REPORT_PATH = REPO_ROOT / "data" / "quality" / "capability_runtime_report.json"
@@ -90,7 +94,7 @@ def _probe(url: str) -> dict:
     t0 = time.monotonic()
     req = urllib.request.Request(url, headers={"User-Agent": "SentinelApex-CapabilityLiveProbe/1.0"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        with safe_urlopen(req, timeout=TIMEOUT_S) as resp:
             body = resp.read(2048)
             elapsed_ms = round((time.monotonic() - t0) * 1000)
             return {"url": url, "status": resp.status, "elapsed_ms": elapsed_ms, "error": None,
