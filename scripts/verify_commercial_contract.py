@@ -608,6 +608,27 @@ def main() -> int:
     check_mssp_tenant_claims(canon)
     check_contract_claim_classes(canon)
 
+    # P0 dossier buyer truth: scope the regression to the tactical product
+    # card; do not change its price, checkout, entitlement or report generator.
+    store_src = (REPO_ROOT / "store.html").read_text(encoding="utf-8")
+    dossier_card = re.search(
+        r"<!-- Tactical Dossier -->(.*?)<!-- Executive Risk Report -->",
+        store_src, flags=re.S,
+    )
+    check(dossier_card is not None, "store.html tactical dossier card located")
+    if dossier_card:
+        dossier_copy = visible_text(dossier_card.group(1)).lower()
+        for claim in ("ready-to-deploy", "full ioc list", "financial impact quantification",
+                      "$1m", "for any active threat"):
+            check(claim not in dossier_copy,
+                  f"store.html tactical dossier does not guarantee unsupported claim: {claim}")
+        for disclosure in ("coverage varies by threat and available evidence",
+                           "financial loss estimates require customer-specific inputs",
+                           "validate in your environment before deployment",
+                           "not a compliance or legal determination"):
+            check(disclosure in dossier_copy,
+                  f"store.html tactical dossier discloses: {disclosure}")
+
     # --- Forbidden quota claims ---------------------------------------------
     # commercial-contract.json's _forbidden_claims also lists compliance-
     # framework names (SOC 2, ISO 27001, ISO 42001, FedRAMP, PCI DSS).
