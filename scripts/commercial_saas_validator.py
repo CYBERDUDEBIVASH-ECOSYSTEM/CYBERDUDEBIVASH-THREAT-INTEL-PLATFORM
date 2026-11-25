@@ -30,6 +30,10 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 REPO_ROOT   = pathlib.Path(__file__).resolve().parent.parent
 GOV_DIR     = REPO_ROOT / "data" / "governance"
@@ -55,7 +59,7 @@ def probe(url: str, method: str = "GET", headers: dict = None,
         req_headers.update(headers)
     try:
         req = urllib.request.Request(url, data=body, headers=req_headers, method=method)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             latency_ms = int((time.monotonic() - t0) * 1000)
             resp_headers = dict(resp.headers)
             if max_bytes > 0:

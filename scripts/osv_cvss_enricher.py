@@ -34,6 +34,10 @@ from __future__ import annotations
 import json, logging, os, re, time, urllib.request, urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s [OSV-CVSS] %(levelname)s %(message)s", datefmt="%H:%M:%S")
@@ -73,7 +77,7 @@ def _get(url: str, headers: dict = None, timeout: int = 10):
             "Accept": "application/json",
             "User-Agent": "CDB-SENTINEL-APEX/1.0 (osv-cvss-enricher)"
         })
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with safe_urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
     except Exception as e:
         log.debug("GET %s failed: %s", url, e)

@@ -24,7 +24,7 @@ PACKAGE FORMATS:
 ================================================================================
 """
 from __future__ import annotations
-import hashlib,io,json,logging,os,zipfile
+import hashlib,io,json,logging,os,tempfile,zipfile
 from dataclasses import dataclass,field,asdict
 from datetime import datetime,timezone
 from typing import Any,Dict,List,Optional
@@ -329,7 +329,7 @@ class EnterpriseRulePackager:
 
 if __name__=="__main__":
     logging.basicConfig(level=logging.INFO)
-    packager = EnterpriseRulePackager(output_dir="/tmp/apex_test_pkg")
+    packager = EnterpriseRulePackager(output_dir=os.path.join(tempfile.gettempdir(), "apex_test_pkg"))
     test_rulesets = [
         {
             "advisory_id":"intel--test001","title":"Test Detection",

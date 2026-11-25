@@ -35,6 +35,10 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 HEALTH_DIR = REPO_ROOT / "data" / "health"
@@ -91,7 +95,7 @@ def probe_endpoint(url: str, timeout: int = 15) -> dict:
         req = urllib.request.Request(
             url, headers={"User-Agent": "SENTINEL-APEX-SLA-ENGINE/1.0"}
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             latency_ms = int((time.monotonic() - t0) * 1000)
             body = resp.read(131072).decode("utf-8", errors="replace")
             return {
@@ -239,7 +243,7 @@ def check_manifest_freshness(probe_results: dict) -> dict:
             req = urllib.request.Request(
                 r["url"], headers={"User-Agent": "SENTINEL-APEX-SLA/1.0"}
             )
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with safe_urlopen(req, timeout=20) as resp:
                 body = resp.read(4096).decode("utf-8", errors="replace")
             # Scan for generated_at
             import re

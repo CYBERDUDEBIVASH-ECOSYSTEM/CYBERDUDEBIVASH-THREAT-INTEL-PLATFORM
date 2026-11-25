@@ -27,6 +27,10 @@ import logging
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [PIPELINE-ALERT] %(message)s")
 log = logging.getLogger("pipeline-alert")
@@ -48,7 +52,7 @@ def send_telegram(token: str, chat_id: str, text: str) -> bool:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with safe_urlopen(req, timeout=10) as resp:
             result = json.loads(resp.read())
             return result.get("ok", False)
     except Exception as e:

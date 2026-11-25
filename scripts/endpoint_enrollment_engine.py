@@ -5,7 +5,7 @@ Section 2: Secure endpoint enrollment, tenant registration, policy distribution,
            API key issuance, agent lifecycle management.
 Multi-tenant | RBAC | MSSP-scalable | Tamper-resistant enrollment
 """
-import json, uuid, time, hashlib, hmac, secrets, logging
+import json, uuid, time, hashlib, hmac, secrets, logging, tempfile
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
@@ -65,7 +65,7 @@ class EndpointEnrollmentEngine:
         "policy_version":     "v1",
     }
 
-    def __init__(self, data_dir: str = "/tmp/apex_enrollment"):
+    def __init__(self, data_dir: str = str(Path(tempfile.gettempdir()) / "apex_enrollment")):
         self._dir      = Path(data_dir)
         self._dir.mkdir(exist_ok=True)
         self._endpoints: Dict[str, EndpointRecord] = {}

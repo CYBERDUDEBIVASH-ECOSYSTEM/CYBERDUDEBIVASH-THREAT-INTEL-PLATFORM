@@ -48,6 +48,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 __version__ = "1.0.0"
 __author__  = "CYBERDUDEBIVASH SENTINEL APEX"
@@ -195,7 +199,7 @@ def _safe_float(val: Any) -> Optional[float]:
 def _http_get(url: str, headers: Dict[str, str], timeout: int = 30) -> bytes:
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except urllib.error.HTTPError as exc:
         if exc.code == 401:

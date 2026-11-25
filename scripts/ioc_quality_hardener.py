@@ -57,6 +57,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -444,7 +448,7 @@ def _backfill_nvd_cvss(cve_id: str):
     try:
         url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id.upper()}"
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with safe_urlopen(req, timeout=8) as resp:
             data = __import__("json").loads(resp.read())
         vulns = data.get("vulnerabilities", [])
         if not vulns:

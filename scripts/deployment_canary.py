@@ -37,6 +37,10 @@ from typing import Dict, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deployment_health_contract as _deploy_health  # noqa: E402
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,7 +62,7 @@ def _fetch(url: str, timeout: int, token: Optional[str] = None) -> Tuple[int, st
         headers["Authorization"] = "Bearer %s" % token
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             body = resp.read(1 << 20).decode("utf-8", errors="replace")  # 1 MB cap (was 64 KB — too small for /api/preview)
             return resp.status, body
     except urllib.error.HTTPError as exc:

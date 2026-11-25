@@ -37,6 +37,10 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(
     level=logging.INFO,
@@ -100,7 +104,7 @@ def send_telegram_admin(token: str, chat_id: str, text: str) -> bool:
     req = urllib.request.Request(url, data=body,
                                   headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with safe_urlopen(req, timeout=10) as resp:
             result = json.loads(resp.read())
             return result.get("ok", False)
     except Exception as e:

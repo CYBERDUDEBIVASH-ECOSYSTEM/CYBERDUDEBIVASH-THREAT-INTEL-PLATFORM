@@ -17,6 +17,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 from urllib import request, error
 from public_manifest_smoke_contract import MAX_BODY_BYTES, classify_manifest_response
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 if hasattr(sys.stdout, 'reconfigure'):
     try: sys.stdout.reconfigure(encoding='utf-8')
@@ -36,7 +40,7 @@ def fetch_url(url, timeout=TIMEOUT_SEC):
     for attempt in range(MAX_RETRIES):
         try:
             t0 = time.time()
-            with request.urlopen(req, timeout=timeout) as r:
+            with safe_urlopen(req, timeout=timeout) as r:
                 body = r.read()
                 elapsed = int((time.time() - t0) * 1000)
                 return r.status, len(body), elapsed
@@ -85,7 +89,7 @@ def smoke_feed_manifest(url):
     for attempt in range(MAX_RETRIES):
         try:
             start = time.monotonic()
-            with request.urlopen(req, timeout=TIMEOUT_SEC) as response:
+            with safe_urlopen(req, timeout=TIMEOUT_SEC) as response:
                 status = response.status
                 body = response.read(MAX_BODY_BYTES + 1)
             elapsed = int((time.monotonic() - start) * 1000)

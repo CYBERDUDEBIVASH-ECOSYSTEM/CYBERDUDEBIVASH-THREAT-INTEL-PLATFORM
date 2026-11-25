@@ -31,6 +31,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deployment_health_contract as dhc  # noqa: E402
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 INTEL_BASE = "https://intel.cyberdudebivash.com"
 DASHBOARD_URL = "https://www.cyberdudebivash.com/"
@@ -40,7 +44,7 @@ PASS_RATIO = 0.8
 def _http_status(url: str, timeout: float) -> tuple[int | None, str | None]:
     req = urllib.request.Request(url, headers={"User-Agent": dhc.USER_AGENT, "Cache-Control": "no-cache"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             return resp.status, None
     except urllib.error.HTTPError as e:
         return e.code, None

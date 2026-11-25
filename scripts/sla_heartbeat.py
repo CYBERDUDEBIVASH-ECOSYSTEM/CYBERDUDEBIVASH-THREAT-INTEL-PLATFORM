@@ -41,6 +41,10 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 DEFAULT_TARGET = "https://intel.cyberdudebivash.com"
 DEFAULT_PENDING = ".sla-heartbeat/pending.json"
@@ -62,7 +66,7 @@ def probe_once(target: str, timeout: float = PROBE_TIMEOUT_S) -> tuple[bool, int
                                                                    "Cache-Control": "no-cache"})
     t0 = time.monotonic()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with safe_urlopen(req, timeout=timeout) as r:
             body = r.read(65536)
             ms = int((time.monotonic() - t0) * 1000)
             if r.status != 200:
@@ -94,7 +98,7 @@ def probe_worker_liveness(target: str, timeout: float = PROBE_TIMEOUT_S) -> str:
         headers={"User-Agent": USER_AGENT, "Accept": "application/json", "Cache-Control": "no-cache"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as res:
+        with safe_urlopen(req, timeout=timeout) as res:
             if res.status != 200:
                 return f"worker_liveness=HTTP_{res.status}"
             body = json.loads(res.read(4096))
@@ -170,7 +174,7 @@ def _post(url: str, secret: str, payload: dict) -> bool:
                                  headers={"Content-Type": "application/json", "X-Admin-Secret": secret,
                                           "User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT_S) as r:
+        with safe_urlopen(req, timeout=PROBE_TIMEOUT_S) as r:
             return r.status == 200
     except urllib.error.HTTPError as e:
         if e.code == 403:

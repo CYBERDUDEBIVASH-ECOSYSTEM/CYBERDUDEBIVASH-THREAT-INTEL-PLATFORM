@@ -61,6 +61,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import deployment_health_contract as _deploy_health  # noqa: E402
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(
     level=logging.INFO,
@@ -163,7 +167,7 @@ def fetch_endpoint(url: str) -> Tuple[Optional[Dict], int, float, Optional[str]]
                 "User-Agent"   : f"SENTINEL-APEX-CANARY/{VERSION}",
             },
         )
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        with safe_urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             ms  = (time.monotonic() - t0) * 1000
             try:

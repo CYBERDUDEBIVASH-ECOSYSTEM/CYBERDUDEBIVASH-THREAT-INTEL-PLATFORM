@@ -34,6 +34,10 @@ import hashlib
 import time
 import urllib.request
 import urllib.error
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SSOT_PATH = os.path.join(REPO_ROOT, "config", "platform_version.json")
@@ -174,7 +178,7 @@ def probe_endpoint(ep: dict, timeout: int = 8) -> dict:
             headers={"User-Agent": "SentinelApex-ObservabilityEngine/1.0"}
         )
         t0 = time.time()
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             elapsed_ms = int((time.time() - t0) * 1000)
             result["status_code"] = resp.status
             result["response_ms"] = elapsed_ms

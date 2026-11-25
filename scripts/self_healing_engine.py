@@ -44,6 +44,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 # Canonical customer-visible freshness contract -- same authority as the R2
 # upload guard, /api/health and the STAGE 5.9.10 release gate.
 import public_freshness_contract as _freshness  # noqa: E402
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 REPO_ROOT   = pathlib.Path(__file__).resolve().parent.parent
 HEALING_DIR = REPO_ROOT / "data" / "self_healing"
@@ -97,7 +101,7 @@ def probe_with_retry(url: str, retries: int = 3, backoff: float = 5.0, headers: 
         t0 = time.monotonic()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "SENTINEL-APEX-HEALING/1.0", **(headers or {})})
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with safe_urlopen(req, timeout=15) as resp:
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 body = resp.read(131072).decode("utf-8", errors="replace")
                 return {"ok": True, "status": resp.status, "latency_ms": latency_ms,

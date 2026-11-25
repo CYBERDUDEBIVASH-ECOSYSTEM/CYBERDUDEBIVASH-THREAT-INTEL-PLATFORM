@@ -631,7 +631,9 @@ class DiversityEnforcerReport:
             log.error("CRITICAL: Failed to write %s: %s", self.OUTPUT_FILE, write_err)
             # Last resort: try writing to /tmp
             import tempfile, shutil
-            tmp = Path(tempfile.mktemp(suffix="_source_diversity.json"))
+            with tempfile.NamedTemporaryFile(suffix="_source_diversity.json", delete=False) as _fh:
+                tmp = Path(_fh.name)
+            tmp.chmod(0o644)  # mkstemp creates 0600; keep the mode the previous mktemp+write produced
             try:
                 tmp.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
                 shutil.copy2(str(tmp), str(self.OUTPUT_FILE))
@@ -776,8 +778,9 @@ def trim_manifest(manifest_path, target_pct=None):
         "sources_trimmed": sources_trimmed,
     }
 
-    tmp = Path(tempfile.mktemp(suffix="_manifest_trim.json",
-                                        dir=str(manifest_path.parent)))
+    with tempfile.NamedTemporaryFile(suffix="_manifest_trim.json", dir=str(manifest_path.parent), delete=False) as _fh:
+        tmp = Path(_fh.name)
+    tmp.chmod(0o644)  # mkstemp creates 0600; the manifest must stay world-readable as before
     try:
         tmp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
                        encoding="utf-8")
