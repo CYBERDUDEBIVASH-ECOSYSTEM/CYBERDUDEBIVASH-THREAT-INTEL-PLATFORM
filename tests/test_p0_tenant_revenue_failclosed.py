@@ -56,3 +56,29 @@ def test_provider_fulfillment_logs_do_not_expose_keys_or_license_values():
     assert "Provisioned {new_api_key}" not in source
     assert "Invalid Gumroad key {license_key}" not in source
     assert "Fulfillment API Error: {str(e)}" not in source
+
+
+def test_governance_refusal_probe_is_behavioral_and_isolated(monkeypatch):
+    from scripts import jwt_governance as audit
+    status, detail = audit.check_legacy_webhook_refusal(audit.SUBSCRIPTION_MGR)
+    assert status == "PASS", detail
+
+    def unexpected_success(*args, **kwargs):
+        assert "CDB_JWT_SECRET" not in kwargs["env"]
+        assert "RAZORPAY_KEY_SECRET" not in kwargs["env"]
+        assert kwargs["timeout"] == 15
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(audit.subprocess, "run", unexpected_success)
+    assert audit.check_legacy_webhook_refusal(audit.SUBSCRIPTION_MGR)[0] == "FAIL"
+
+
+def test_governance_refusal_probe_rejects_side_effects(monkeypatch):
+    from scripts import jwt_governance as audit
+
+    def unexpected_write(*args, **kwargs):
+        (Path(kwargs["cwd"]) / "unexpected.json").write_text("{}")
+        return subprocess.CompletedProcess(args, 78, "", "P0_FULFILLMENT_HOLD: no customer credential issued")
+
+    monkeypatch.setattr(audit.subprocess, "run", unexpected_write)
+    assert audit.check_legacy_webhook_refusal(audit.SUBSCRIPTION_MGR)[0] == "FAIL"
