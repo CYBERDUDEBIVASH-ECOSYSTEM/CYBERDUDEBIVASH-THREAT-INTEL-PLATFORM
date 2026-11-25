@@ -47,6 +47,10 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import public_freshness_contract as _freshness  # noqa: E402
 
 import deployment_health_contract as _deploy_health  # noqa: E402
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 MAX_MANIFEST_AGE_HOURS = _freshness.max_public_manifest_age_hours()
 
@@ -71,7 +75,7 @@ def probe_json(url: str, timeout: int = 20, headers: dict | None = None) -> dict
     t0 = time.monotonic()
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "SENTINEL-APEX-VALIDATOR/1.0", **(headers or {})})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             # Read one byte past the cap so a body that's actually larger is distinguishable
             # from one that happens to be exactly MAX_PROBE_BODY_BYTES.
             raw = resp.read(MAX_PROBE_BODY_BYTES + 1)

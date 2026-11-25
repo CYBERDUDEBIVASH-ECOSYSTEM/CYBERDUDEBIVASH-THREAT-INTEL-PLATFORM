@@ -112,6 +112,10 @@ import r2_upload_verifier as _verifier  # noqa: E402 -- reuse, not reimplement
 import r2_upload as _r2_upload  # noqa: E402 -- BUCKET_REPORTS, get_credentials()
 from canonical_timestamp import parse_timestamp  # noqa: E402 -- reuse, not reimplement
 from r2_cost_guard import R2Budgets, R2OperationPlan, emit_summary  # noqa: E402
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 # Restore whatever the job-level credentials were, now that the reports-scoped
 # constants have been captured inside _verifier's module globals.
@@ -579,7 +583,7 @@ def _purge_public_url(url: str) -> bool:
                 "Content-Type": "application/json",
             },
         )
-        with urllib.request.urlopen(req, timeout=CACHE_PURGE_TIMEOUT) as resp:
+        with safe_urlopen(req, timeout=CACHE_PURGE_TIMEOUT) as resp:
             result = json.loads(resp.read())
             return bool(result.get("success"))
     except Exception as e:

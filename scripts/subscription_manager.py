@@ -30,6 +30,10 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 # Bootstrap paths
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -208,7 +212,7 @@ def gumroad_sync() -> Dict[str, Any]:
             f"{url}?access_token={token}&page=1",
             headers={"Accept": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with safe_urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
         sales   = data.get("sales", [])

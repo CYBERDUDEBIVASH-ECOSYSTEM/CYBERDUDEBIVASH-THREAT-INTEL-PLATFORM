@@ -57,6 +57,10 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = REPO_ROOT / "agent" / "config.py"
@@ -100,7 +104,7 @@ def probe(url: str) -> Tuple[str, str, int]:
     req = urllib.request.Request(
         url, headers={"User-Agent": "Mozilla/5.0 (compatible; SentinelAPEX/1.0)"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with safe_urlopen(req, timeout=TIMEOUT) as resp:
             body = resp.read()
             status = f"HTTP {resp.status}"
     except urllib.error.HTTPError as e:

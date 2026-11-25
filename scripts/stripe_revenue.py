@@ -62,6 +62,10 @@ import urllib.parse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -416,7 +420,7 @@ def _send_welcome_notification(email: str, tier: str, key_prefix: str) -> None:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with safe_urlopen(req, timeout=10) as resp:
             result = json.loads(resp.read())
             if result.get("ok"):
                 logger.info(f"Welcome notification sent for {email[:30]}")

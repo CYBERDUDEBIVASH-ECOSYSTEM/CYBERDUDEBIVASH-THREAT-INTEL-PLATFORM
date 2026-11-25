@@ -55,6 +55,10 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 log = logging.getLogger("severity_epss_truth")
 
@@ -233,7 +237,7 @@ def fetch_first_epss(cves: Iterable[str], timeout: int = 20) -> Optional[Dict[st
         for attempt in range(3):
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "CDB-SENTINEL-APEX/severity-epss-truth"})
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                with safe_urlopen(req, timeout=timeout) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                 break
             except Exception as exc:  # network / HTTP / JSON

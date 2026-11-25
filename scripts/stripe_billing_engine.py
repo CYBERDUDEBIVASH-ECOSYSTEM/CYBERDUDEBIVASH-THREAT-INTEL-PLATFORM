@@ -42,6 +42,10 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 log = logging.getLogger("apex.billing")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [APEX-BILLING] %(message)s")
@@ -268,7 +272,7 @@ class StripeClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with safe_urlopen(req, timeout=15) as r:
                 return json.loads(r.read())
         except Exception as e:
             log.error(f"Stripe API error: {e}")

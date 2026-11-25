@@ -23,6 +23,10 @@ import shutil
 import sys
 import logging
 from datetime import datetime, timezone
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [v74-ENRICHER] %(message)s")
 log = logging.getLogger("v74")
@@ -482,7 +486,7 @@ def dispatch_telegram_alerts(alerts: list):
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            with safe_urlopen(req, timeout=5) as resp:
                 if resp.status == 200:
                     sent += 1
                     log.info(f"Telegram alert sent: {sev} — {title[:50]}")

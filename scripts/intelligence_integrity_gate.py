@@ -43,6 +43,10 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(
     level=logging.INFO,
@@ -691,7 +695,7 @@ def _fetch_live_kev_catalog() -> Tuple[Optional[set], str]:
             _KEV_LIVE_URL,
             headers={"User-Agent": "SENTINEL-APEX-IIG/175.0 (KEV-CrossValidation)"},
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with safe_urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         vulns = data.get("vulnerabilities", [])
         ids = set()

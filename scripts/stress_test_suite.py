@@ -31,6 +31,10 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 REPO_ROOT   = pathlib.Path(__file__).resolve().parent.parent
 GOV_DIR     = REPO_ROOT / "data" / "governance"
@@ -51,7 +55,7 @@ def probe(url: str, timeout: int = 15, max_bytes: int = 8192) -> dict:
     t0 = time.monotonic()
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "SENTINEL-APEX-STRESS/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             lat = int((time.monotonic() - t0) * 1000)
             body = resp.read(max_bytes).decode("utf-8", errors="replace") if max_bytes else resp.read().decode("utf-8", errors="replace")
             return {"ok": True, "status": resp.status, "latency_ms": lat, "body": body}

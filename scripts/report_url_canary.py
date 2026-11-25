@@ -119,6 +119,10 @@ from r2_report_publisher import (  # noqa: E402
     load_publish_state,
     report_window_hours,
 )
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 REPORTS_DIR        = REPO_ROOT / "reports"
 DIST_REPORTS_DIR   = REPO_ROOT / "dist" / "reports"
 PAGES_BASE_URL     = os.environ.get("PAGES_BASE_URL", "https://intel.cyberdudebivash.com").rstrip("/")
@@ -357,7 +361,7 @@ def probe_url(report_path: str) -> Tuple[str, int, str, str]:
     try:
         req = urllib.request.Request(full_url, method="GET")
         req.add_header("User-Agent", "CDB-Sentinel-Canary/174.1")
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+        with safe_urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             body = resp.read(131072).decode("utf-8", errors="replace")
             return full_url, resp.status, body, ""
     except urllib.error.HTTPError as exc:

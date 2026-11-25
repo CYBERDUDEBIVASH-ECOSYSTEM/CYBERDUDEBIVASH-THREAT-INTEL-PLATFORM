@@ -83,6 +83,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 logging.basicConfig(
     level=logging.INFO,
@@ -147,7 +151,7 @@ def _http_post(url: str, payload_bytes: bytes, headers: dict) -> tuple[int, str]
     """
     req = urllib.request.Request(url, data=payload_bytes, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as resp:
+        with safe_urlopen(req, timeout=TIMEOUT_SEC) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", errors="replace")

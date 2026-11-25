@@ -32,6 +32,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+try:  # run as `python scripts/<name>.py`
+    from cdb_safe_http import safe_urlopen
+except ImportError:  # imported as `scripts.<name>`
+    from scripts.cdb_safe_http import safe_urlopen
 
 REPO_ROOT   = pathlib.Path(__file__).resolve().parent.parent
 ALERTS_DIR  = REPO_ROOT / "data" / "alerts"
@@ -108,7 +112,7 @@ def send_telegram(message: str, config: dict) -> bool:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with safe_urlopen(req, timeout=10) as resp:
             return resp.status == 200
     except Exception as e:
         print(f"[ALERT] Telegram send failed: {e}")
@@ -179,7 +183,7 @@ def probe_endpoint(url: str, timeout: int = 10) -> dict:
     t0 = time.monotonic()
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "SENTINEL-APEX-ALERT/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with safe_urlopen(req, timeout=timeout) as resp:
             latency_ms = int((time.monotonic() - t0) * 1000)
             body = resp.read(4096).decode("utf-8", errors="replace")
             return {"ok": True, "status": resp.status, "latency_ms": latency_ms, "body": body}
