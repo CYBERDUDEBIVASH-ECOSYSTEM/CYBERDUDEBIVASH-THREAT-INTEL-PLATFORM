@@ -6,10 +6,10 @@ id is ever printed.
 
 | Mode | Needs | Mutates | Checks |
 |---|---|---|---|
-| `public` | nothing | nothing | 15 boundaries: billing account / readiness / cancel / refund approval / holds refuse without credentials; Razorpay and Gumroad webhooks refuse unsigned pings **and are configured** (a 500 "secret not configured" fails); checkout refuses an unknown tier; both manual-payment routes answer 410; `billing.html` is served; `admin.html` is complete |
+| `public` | nothing | nothing | 16 boundaries: billing account / readiness / cancel / refund approval / holds refuse without credentials; Razorpay and Gumroad webhooks refuse unsigned pings **and are configured** (a 500 "secret not configured" fails); checkout refuses an unknown tier; both manual-payment routes answer 410; `billing.html` is served; `admin.html` is complete |
 | `admin` | `CDB_BILLING_CANARY_ADMIN_SECRET` | nothing | + admin health carries the commercial summary; readiness verdict reported |
 | `live` | same | nothing | as `admin`, and a `BLOCKED` verdict **fails** (production go-live gate) |
-| `test-checkout` | same, on a Razorpay **test-mode** deployment | one unpaid test subscription | + checkout passes the Plan price check against the real test Plan, retry is reused, status needs payment proof. Refused (exit 13) unless readiness proves a `rzp_test_` key |
+| `test-checkout` | same, on a Razorpay **test-mode** deployment | one unpaid test subscription | + checkout passes the Plan price check against the real test Plan, retry is reused, status needs payment proof. Refused (exit 13) unless readiness proves a `rzp_test_` key; failed public/admin checks prevent checkout; an unexpected returned key mode stops further probes |
 
 ```
 node deploy/billing-canary/canary.mjs public

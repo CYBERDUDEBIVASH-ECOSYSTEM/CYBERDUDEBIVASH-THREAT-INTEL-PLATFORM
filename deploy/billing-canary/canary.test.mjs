@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { test } from "node:test";
 
-import { EXIT, runPublicChecks, runAdminChecks, runTestCheckout, readinessProvesTestMode, isMinimalRevenueHealth } from "./canary-lib.mjs";
+import { EXIT, runPublicChecks, runAdminChecks, runTestCheckout, readinessProvesTestMode, isMinimalRevenueHealth, isTrustedAccessRedirect } from "./canary-lib.mjs";
 import revenueWorker from "../../workers/revenue-engine/src/production-entry.js";
 import gatewayWorker from "../../workers/intel-gateway/src/production-entry.js";
 import { createD1 } from "../../workers/revenue-engine/src/__tests__/helpers/d1-sqlite.js";
@@ -188,4 +188,48 @@ test("canary FAILS when a webhook secret is missing (500 is not a refusal: real 
   const s = steps.find((x) => x.step === "razorpay_webhook_refuses_bad_signature");
   assert.equal(s.ok, false);
   assert.match(s.detail.finding, /RAZORPAY_WEBHOOK_SECRET not configured/);
+});
+
+test("public canary does not certify cancellation when billing is unavailable", async () => {
+  const d = deployment();
+  delete d.revenueEnv.RAZORPAY_KEY_SECRET;
+  const s = (await runPublicChecks(d)).find((x) => x.step === "cancel_requires_key");
+  assert.equal(s.detail.status, 503);
+  assert.equal(s.ok, false);
+});
+
+test("Access redirect must use an HTTPS Cloudflare Access host without userinfo", () => {
+  assert.equal(isTrustedAccessRedirect("https://example.cloudflareaccess.com/cdn-cgi/access/login"), true);
+  for (const value of [null, "/login", "http://example.cloudflareaccess.com/login",
+    "https://example.cloudflareaccess.com:password@evil.example/login",
+    "https://example.cloudflareaccess.com.evil.example/login",
+    "https://example.cloudflareaccess.com:8443/login", "https://evil.example/login"]) {
+    assert.equal(isTrustedAccessRedirect(value), false, String(value));
+  }
+});
+
+test("test-mode proof rejects ambiguous, duplicate and malformed evidence", () => {
+  const valid = { id: "razorpay_live_mode", ok: false,
+    detail: "Key is not a live-mode key (test mode): no real payment can be taken." };
+  assert.equal(readinessProvesTestMode({ verdict: "BLOCKED", checks: [valid] }), true);
+  for (const readiness of [
+    { verdict: "READY", checks: [valid] },
+    { verdict: "BLOCKED", checks: [valid, valid] },
+    { verdict: "BLOCKED", checks: [{ ...valid, detail: "not test mode" }] },
+    { verdict: "BLOCKED", checks: [{ ...valid, ok: true }] },
+    { verdict: "BLOCKED", checks: [null] },
+  ]) assert.equal(readinessProvesTestMode(readiness), false);
+});
+
+test("test checkout stops immediately if returned key is not test-mode", async () => {
+  for (const key_id of ["rzp_live_TEST_ONLY", "", null]) {
+    let calls = 0;
+    const intel = async () => {
+      calls++;
+      return { status: 200, body: { subscription_id: "sub_TEST_ONLY", key_id } };
+    };
+    const steps = await runTestCheckout({ intel }, { email: "fixture@example.com" });
+    assert.equal(calls, 1);
+    assert.deepEqual(failed(steps), ["test_checkout_uses_test_key"]);
+  }
 });
