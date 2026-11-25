@@ -172,9 +172,12 @@ jobs:
       - name: "Purge Cloudflare cache"
         if: github.event.inputs.dry_run != 'true'
         continue-on-error: true
+        env:
+          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
+          CF_CACHE_PURGE_TOKEN: ${{ secrets.CF_CACHE_PURGE_TOKEN }}
         run: |
-          ZONE_ID="${{ secrets.CF_ZONE_ID }}"
-          TOKEN="${{ secrets.CF_CACHE_PURGE_TOKEN }}"
+          ZONE_ID="$CF_ZONE_ID"
+          TOKEN="$CF_CACHE_PURGE_TOKEN"
           if [ -z "$ZONE_ID" ] || [ -z "$TOKEN" ]; then
             echo "[WARN] cache purge credentials unavailable; endpoint canary below remains authoritative"
             exit 0
