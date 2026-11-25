@@ -43,6 +43,7 @@ import time
 import hashlib
 import urllib.request
 import urllib.error
+from urllib.parse import urlencode, urlsplit
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -94,12 +95,36 @@ TARGET_DISTRIBUTION = {
 
 _nvd_cache: Dict[str, Dict] = {}
 
+
+class _SourceRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep enrichment requests, including API-key headers, on their source."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        original = urlsplit(req.full_url)
+        target = urlsplit(newurl)
+        if (target.scheme != "https" or target.netloc != original.netloc
+                or target.username is not None or target.password is not None):
+            raise urllib.error.HTTPError(req.full_url, code, "Untrusted source redirect", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _source_open(req, timeout):
+    """Allow only the two configured HTTPS enrichment origins."""
+    target = urlsplit(req.full_url)
+    if (target.scheme != "https" or target.netloc not in
+            {"services.nvd.nist.gov", "www.cisa.gov"}):
+        raise ValueError("Untrusted enrichment origin")
+    return urllib.request.build_opener(_SourceRedirectHandler()).open(req, timeout=timeout)
+
+
 def fetch_nvd_cve(cve_id: str, retries: int = 3) -> Optional[Dict]:
     """Fetch CVE details from NVD API with retry."""
+    if not isinstance(cve_id, str) or not re.fullmatch(r"CVE-[0-9]{4}-[0-9]{4,}", cve_id, re.I | re.ASCII):
+        return None
+    cve_id = cve_id.upper()
     if cve_id in _nvd_cache:
         return _nvd_cache[cve_id]
 
-    url = f"{NVD_API_BASE}?cveId={cve_id}"
+    url = f"{NVD_API_BASE}?{urlencode({'cveId': cve_id})}"
     headers = {"User-Agent": "SENTINEL-APEX/162.0 (NVD-Enrichment)"}
     if NVD_API_KEY:
         headers["apiKey"] = NVD_API_KEY
@@ -107,7 +132,7 @@ def fetch_nvd_cve(cve_id: str, retries: int = 3) -> Optional[Dict]:
     for attempt in range(retries):
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with _source_open(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
                 vulns = data.get("vulnerabilities", [])
                 if vulns:
@@ -155,7 +180,7 @@ def extract_cvss_from_nvd(cve_data: Dict) -> Tuple[Optional[float], Optional[str
 
 _kev_set: Optional[set] = None
 
-def load_kev_catalog() -> set:
+def load_kev_catalog(*, persist_cache: bool = True) -> set:
     """Load CISA KEV catalog (local cache or live fetch)."""
     global _kev_set
     if _kev_set is not None:
@@ -178,20 +203,21 @@ def load_kev_catalog() -> set:
             KEV_CATALOG_URL,
             headers={"User-Agent": "SENTINEL-APEX/162.0 (KEV-Integration)"}
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _source_open(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
             vulns = data.get("vulnerabilities", [])
             _kev_set = {v["cveID"] for v in vulns if "cveID" in v}
             log.info(f"KEV catalog fetched live: {len(_kev_set)} entries")
 
-            # Cache locally
-            KEV_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(KEV_CACHE_PATH, "w") as f:
-                json.dump({
-                    "kev_ids": sorted(_kev_set),
-                    "count":   len(_kev_set),
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
-                }, f, indent=2)
+            # Dry-run callers may read existing cache or fetch, never write it.
+            if persist_cache:
+                KEV_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with open(KEV_CACHE_PATH, "w") as f:
+                    json.dump({
+                        "kev_ids": sorted(_kev_set),
+                        "count":   len(_kev_set),
+                        "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    }, f, indent=2)
             return _kev_set
     except Exception as e:
         log.warning(f"KEV catalog fetch failed: {e}")
@@ -200,9 +226,9 @@ def load_kev_catalog() -> set:
     return _kev_set
 
 
-def is_kev(cve_id: str) -> bool:
+def is_kev(cve_id: str, *, persist_cache: bool = True) -> bool:
     """Check if CVE is in CISA KEV catalog."""
-    return cve_id.upper() in load_kev_catalog()
+    return cve_id.upper() in load_kev_catalog(persist_cache=persist_cache)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -223,7 +249,7 @@ except ImportError as e:
     log.warning(f"TA engine not available: {e}")
 
 
-def compute_blended_risk(item: Dict, nvd_enabled: bool = True) -> Dict:
+def compute_blended_risk(item: Dict, nvd_enabled: bool = True, *, persist_cache: bool = True) -> Dict:
     """
     Compute blended risk score using:
     - CVSS track for CVE items
@@ -244,7 +270,7 @@ def compute_blended_risk(item: Dict, nvd_enabled: bool = True) -> Dict:
     cve_ids = item.get("cve_ids") or []
     if isinstance(cve_ids, list) and len(cve_ids) > 0 and nvd_enabled:
         for cve_id in cve_ids[:3]:  # Cap at 3 CVEs per advisory
-            if not re.match(r"CVE-\d{4}-\d+", str(cve_id), re.I):
+            if not re.fullmatch(r"CVE-[0-9]{4}-[0-9]{4,}", str(cve_id), re.I | re.ASCII):
                 continue
 
             cve_data = fetch_nvd_cve(str(cve_id))
@@ -259,7 +285,7 @@ def compute_blended_risk(item: Dict, nvd_enabled: bool = True) -> Dict:
                     break
 
             # KEV check
-            if is_kev(str(cve_id)):
+            if is_kev(str(cve_id), persist_cache=persist_cache):
                 item["kev_present"] = True
                 enrichment["kev_confirmed"] = str(cve_id)
                 log.info(f"KEV confirmed: {cve_id}")
@@ -413,6 +439,8 @@ def upgrade_feed(
     out_path:  Path,
     nvd_enabled: bool = True,
     max_items:   int = 200,
+    *,
+    dry_run: bool = False,
 ) -> Dict:
     """
     Main feed quality upgrade pipeline.
@@ -443,7 +471,7 @@ def upgrade_feed(
 
     for i, item in enumerate(items[:max_items]):
         log.info(f"Scoring item {i+1}/{min(total_input, max_items)}: {item.get('id', '?')[:30]}")
-        item = compute_blended_risk(item, nvd_enabled=nvd_enabled)
+        item = compute_blended_risk(item, nvd_enabled=nvd_enabled, persist_cache=not dry_run)
 
         sev = item.get("severity", "LOW")
         stats[sev.lower() if sev.lower() in stats else "info"] += 1
@@ -462,11 +490,12 @@ def upgrade_feed(
     log.info(f"Distribution AFTER: {dist_after['distribution']}")
     log.info(f"Enterprise grade AFTER: {dist_after['enterprise_grade']}")
 
-    # Write upgraded feed
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w") as f:
-        json.dump(upgraded, f, indent=2, default=str)
-    log.info(f"Upgraded feed written: {out_path}")
+    # Dry-run is analysis only; do not create even a temporary feed.
+    if not dry_run:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "w") as f:
+            json.dump(upgraded, f, indent=2, default=str)
+        log.info(f"Upgraded feed written: {out_path}")
 
     # Quality report
     report = {
@@ -490,10 +519,11 @@ def upgrade_feed(
         },
     }
 
-    QUALITY_REPORT.parent.mkdir(parents=True, exist_ok=True)
-    with open(QUALITY_REPORT, "w") as f:
-        json.dump(report, f, indent=2)
-    log.info(f"Quality report written: {QUALITY_REPORT}")
+    if not dry_run:
+        QUALITY_REPORT.parent.mkdir(parents=True, exist_ok=True)
+        with open(QUALITY_REPORT, "w") as f:
+            json.dump(report, f, indent=2)
+        log.info(f"Quality report written: {QUALITY_REPORT}")
 
     return report
 
@@ -510,13 +540,14 @@ def main() -> int:
     args = parser.parse_args()
 
     feed_path = Path(args.feed)
-    out_path  = Path(args.out) if not args.dry_run else Path("/tmp/feed_dry_run.json")
+    out_path  = Path(args.out)
 
     report = upgrade_feed(
         feed_path,
         out_path,
         nvd_enabled=not args.no_nvd,
         max_items=args.max,
+        dry_run=args.dry_run,
     )
 
     print("\n" + "="*60)
