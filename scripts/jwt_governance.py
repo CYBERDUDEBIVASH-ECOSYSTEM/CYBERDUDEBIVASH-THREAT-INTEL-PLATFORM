@@ -15,7 +15,7 @@ PURPOSE:
 CHECKS:
   1. JWT_SECRET strength  — must be >= 32 bytes (256-bit)
   2. JWT expiry policy    — access tokens <= 24h, refresh <= 30d
-  3. Webhook HMAC guard   — subscription_manager.py must verify signature
+  3. Legacy webhook guard — subscription_manager.py must reject direct dispatch
   4. Secret rotation age  — warn if secret_metadata.json > 90 days old
   5. Algorithm whitelist  — only HS256/RS256/ES256 permitted
 
@@ -38,6 +38,7 @@ import os
 import pathlib
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -105,32 +106,33 @@ def check_secret_strength() -> Tuple[str, str]:
     return "PASS", f"CDB_JWT_SECRET length >= {MIN_SECRET_BYTES} bytes (entropy OK)"
 
 
-def check_webhook_hmac(src_path: pathlib.Path) -> Tuple[str, str]:
-    """Verify HMAC signature check exists in subscription_manager."""
-    if not src_path.exists():
-        return "WARN", f"Source not found: {src_path.name} (cannot audit)"
+def check_legacy_webhook_refusal(src_path: pathlib.Path) -> Tuple[str, str]:
+    """Behavioral check: the legacy tenant CLI must not accept payment dispatch.
 
-    src = src_path.read_text(encoding="utf-8", errors="replace")
-
-    hmac_patterns = [
-        r"hmac\.new",
-        r"hmac\.compare_digest",
-        r"HMAC",
-        r"sha256.*signature",
-        r"verify.*signature",
-        r"validate.*webhook",
-        r"webhook.*secret",
-        r"x-gumroad-signature",
-        r"stripe-signature",
-        r"verify_signature",
-    ]
-    found = [p for p in hmac_patterns if re.search(p, src, re.IGNORECASE)]
-    if not found:
-        return "FAIL", (
-            f"{src_path.name}: No HMAC/signature verification found. "
-            "Webhook payloads accepted without authenticity check (SSRF/forgery risk)."
-        )
-    return "PASS", f"{src_path.name}: HMAC/webhook signature patterns present ({len(found)} matches)"
+    Execute only the repository-owned module in an isolated empty working
+    directory, without inherited payment credentials, and require the exact
+    refusal status. This does not certify a live provider or webhook.
+    """
+    if not src_path.is_file() or src_path.resolve() != SUBSCRIPTION_MGR.resolve():
+        return "FAIL", "Legacy subscription CLI source unavailable or unexpected"
+    try:
+        with tempfile.TemporaryDirectory(prefix="apex-jwt-refusal-") as directory:
+            env = {"PYTHONPATH": str(REPO_ROOT), "PYTHONDONTWRITEBYTECODE": "1"}
+            if os.name == "nt" and os.environ.get("SYSTEMROOT"):
+                env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+            result = subprocess.run(
+                [sys.executable, "-m", "agent.subscription_manager", "--webhook-event"],
+                cwd=directory, env=env, capture_output=True, text=True,
+                timeout=15, check=False,
+            )
+            if (result.returncode != 78 or result.stdout.strip()
+                    or "P0_FULFILLMENT_HOLD" not in result.stderr
+                    or "no customer credential issued" not in result.stderr
+                    or any(pathlib.Path(directory).iterdir())):
+                return "FAIL", "Legacy webhook refusal behavior not established"
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return "FAIL", "Legacy webhook refusal probe could not complete"
+    return "PASS", "Legacy CLI rejects webhook dispatch; no credential or state created"
 
 
 def check_jwt_expiry_policy(src_paths: List[pathlib.Path]) -> Tuple[str, str]:
@@ -255,8 +257,8 @@ def main() -> int:
     status, detail = check_secret_strength()
     record("secret_strength", status, detail)
 
-    status, detail = check_webhook_hmac(SUBSCRIPTION_MGR)
-    record("webhook_hmac_subscription_mgr", status, detail)
+    status, detail = check_legacy_webhook_refusal(SUBSCRIPTION_MGR)
+    record("legacy_webhook_dispatch_denied", status, detail)
 
     status, detail = check_jwt_expiry_policy(src_files)
     record("jwt_expiry_policy", status, detail)

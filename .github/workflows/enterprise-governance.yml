@@ -206,8 +206,17 @@ jobs:
           # Run governance engine; capture exit code
           set +e
           python3 scripts/enterprise_governance_engine.py $STRICT_FLAG 2>&1 | tee /tmp/governance_output.txt
-          GOV_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (GOV_EXIT)"
+            exit 1
+          fi
+          GOV_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$GOV_EXIT" in
+            0|1|3) ;;
+            *) echo "::error::Unexpected governance validator exit (GOV_EXIT=$GOV_EXIT)"; exit 1 ;;
+          esac
 
           # Parse governance grade from output
           GRADE=$(grep -oP 'Grade\s*:\s*\K[A-F+]+' /tmp/governance_output.txt | head -1 || echo "UNKNOWN")
@@ -251,8 +260,17 @@ jobs:
             --repo-root . \
             --report data/governance/contract_report.json \
             $LIVE_FLAG $STRICT_FLAG 2>&1 | tee /tmp/contract_output.txt
-          CONTRACT_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (CONTRACT_EXIT)"
+            exit 1
+          fi
+          CONTRACT_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$CONTRACT_EXIT" in
+            0|1|3) ;;
+            *) echo "::error::Unexpected governance validator exit (CONTRACT_EXIT=$CONTRACT_EXIT)"; exit 1 ;;
+          esac
 
           # Determine status label
           if [ "$CONTRACT_EXIT" -eq 0 ]; then
@@ -285,8 +303,13 @@ jobs:
           echo "[PHASE 4] Running source_trust_engine.py..."
           set +e
           python3 scripts/source_trust_engine.py --report --update 2>&1 | tee /tmp/trust_output.txt
-          TRUST_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (TRUST_EXIT)"
+            exit 1
+          fi
+          TRUST_EXIT=${PHASE_PIPE_STATUS[0]}
 
           if [ "$TRUST_EXIT" -eq 0 ]; then
             echo "[PHASE 4] Source trust assessment: COMPLETE"
@@ -304,8 +327,13 @@ jobs:
           mkdir -p data/governance
           set +e
           python3 scripts/confidence_corroboration_engine.py 2>&1 | tee /tmp/confidence_output.txt
-          CONF_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (CONF_EXIT)"
+            exit 1
+          fi
+          CONF_EXIT=${PHASE_PIPE_STATUS[0]}
 
           CONF_STATUS="PASS"
           if [ "$CONF_EXIT" -eq 1 ]; then
@@ -330,8 +358,13 @@ jobs:
           echo "[PHASE 5] Running sla_engine.py..."
           set +e
           python3 scripts/sla_engine.py --tier enterprise --report 2>&1 | tee /tmp/sla_output.txt
-          SLA_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (SLA_EXIT)"
+            exit 1
+          fi
+          SLA_EXIT=${PHASE_PIPE_STATUS[0]}
 
           SLA_STATUS="OK"
           if [ "$SLA_EXIT" -ne 0 ]; then
@@ -350,8 +383,17 @@ jobs:
           mkdir -p data/health
           set +e
           python3 scripts/feed_freshness_governance.py 2>&1 | tee /tmp/freshness_output.txt
-          FRESH_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (FRESH_EXIT)"
+            exit 1
+          fi
+          FRESH_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$FRESH_EXIT" in
+            0|1|3) ;;
+            *) echo "::error::Unexpected governance validator exit (FRESH_EXIT=$FRESH_EXIT)"; exit 1 ;;
+          esac
 
           FRESH_STATUS="OK"
           if [ "$FRESH_EXIT" -eq 1 ]; then
@@ -375,8 +417,17 @@ jobs:
           mkdir -p data/governance
           set +e
           python3 scripts/api_contract_drift_detector.py 2>&1 | tee /tmp/drift_output.txt
-          DRIFT_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (DRIFT_EXIT)"
+            exit 1
+          fi
+          DRIFT_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$DRIFT_EXIT" in
+            0|1|3) ;;
+            *) echo "::error::Unexpected governance validator exit (DRIFT_EXIT=$DRIFT_EXIT)"; exit 1 ;;
+          esac
 
           DRIFT_STATUS="OK"
           if [ "$DRIFT_EXIT" -eq 1 ]; then
@@ -413,8 +464,17 @@ jobs:
           print(f'Freshness: {snap[\"commercial_kpis\"].get(\"freshness_pct\", 0)}%')
           sys.exit(0 if status == 'HEALTHY' else (1 if status == 'CRITICAL' else 3))
           " 2>&1 | tee /tmp/commercial_output.txt
-          COMM_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (COMM_EXIT)"
+            exit 1
+          fi
+          COMM_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$COMM_EXIT" in
+            0|1|3) ;;
+            *) echo "::error::Unexpected governance validator exit (COMM_EXIT=$COMM_EXIT)"; exit 1 ;;
+          esac
 
           COMM_STATUS="HEALTHY"
           if [ "$COMM_EXIT" -eq 1 ]; then
@@ -435,8 +495,17 @@ jobs:
           mkdir -p data/governance
           set +e
           python3 scripts/evidence_score_enforcer.py 2>&1 | tee /tmp/evidence_output.txt
-          EVID_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (EVID_EXIT)"
+            exit 1
+          fi
+          EVID_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$EVID_EXIT" in
+            0|1) ;;
+            *) echo "::error::Unexpected governance validator exit (EVID_EXIT=$EVID_EXIT)"; exit 1 ;;
+          esac
 
           EVID_STATUS="PASS"
           if [ "$EVID_EXIT" -eq 1 ]; then
@@ -458,8 +527,13 @@ jobs:
           mkdir -p data/governance data/intelligence
           set +e
           python3 scripts/attack_coverage_analytics.py 2>&1 | tee /tmp/attack_output.txt
-          ATK_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (ATK_EXIT)"
+            exit 1
+          fi
+          ATK_EXIT=${PHASE_PIPE_STATUS[0]}
 
           ATK_STATUS="PASS"
           if [ "$ATK_EXIT" -ne 0 ]; then
@@ -479,8 +553,17 @@ jobs:
           mkdir -p data/governance
           set +e
           python3 scripts/canary_contract_validator.py 2>&1 | tee /tmp/canary_output.txt
-          CANARY_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (CANARY_EXIT)"
+            exit 1
+          fi
+          CANARY_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$CANARY_EXIT" in
+            0|2) ;;
+            *) echo "::error::Unexpected governance validator exit (CANARY_EXIT=$CANARY_EXIT)"; exit 1 ;;
+          esac
 
           CANARY_STATUS="PASS"
           if [ "$CANARY_EXIT" -eq 2 ]; then
@@ -507,15 +590,25 @@ jobs:
           mkdir -p data/governance
           set +e
           python3 scripts/jwt_governance.py 2>&1 | tee /tmp/jwt_output.txt
-          JWT_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (JWT_EXIT)"
+            exit 1
+          fi
+          JWT_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$JWT_EXIT" in
+            0|1|3) ;;
+            *) echo "::error::Unexpected governance validator exit (JWT_EXIT=$JWT_EXIT)"; exit 1 ;;
+          esac
 
           JWT_STATUS="PASS"
           if [ "$JWT_EXIT" -eq 1 ]; then
             JWT_STATUS="FAIL"
-            echo "::error::JWT HARD FAIL: weak secret or missing HMAC webhook verification"
+            echo "::error::JWT HARD FAIL: failed credential or webhook governance control"
             grep "FAIL" /tmp/jwt_output.txt || true
             # JWT hard fails are critical security violations — always exit 1
+            echo "jwt_status=$JWT_STATUS" >> "$GITHUB_OUTPUT"
             exit 1
           elif [ "$JWT_EXIT" -eq 3 ]; then
             JWT_STATUS="WARN"
@@ -534,8 +627,17 @@ jobs:
           mkdir -p data/governance
           set +e
           python3 scripts/graph_integrity_validator.py 2>&1 | tee /tmp/graph_output.txt
-          GRAPH_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (GRAPH_EXIT)"
+            exit 1
+          fi
+          GRAPH_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$GRAPH_EXIT" in
+            0|1|3) ;;
+            *) echo "::error::Unexpected governance validator exit (GRAPH_EXIT=$GRAPH_EXIT)"; exit 1 ;;
+          esac
 
           GRAPH_STATUS="PASS"
           if [ "$GRAPH_EXIT" -eq 1 ]; then
@@ -560,8 +662,17 @@ jobs:
           mkdir -p data/governance
           set +e
           python3 scripts/repo_scale_governance.py 2>&1 | tee /tmp/scale_output.txt
-          SCALE_EXIT=$?
+          PHASE_PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
+          if [ "${#PHASE_PIPE_STATUS[@]}" -ne 2 ] || [ "${PHASE_PIPE_STATUS[1]}" -ne 0 ]; then
+            echo "::error::Governance validator log capture failed (SCALE_EXIT)"
+            exit 1
+          fi
+          SCALE_EXIT=${PHASE_PIPE_STATUS[0]}
+          case "$SCALE_EXIT" in
+            0|3) ;;
+            *) echo "::error::Unexpected governance validator exit (SCALE_EXIT=$SCALE_EXIT)"; exit 1 ;;
+          esac
 
           SCALE_STATUS="PASS"
           if [ "$SCALE_EXIT" -eq 3 ]; then
