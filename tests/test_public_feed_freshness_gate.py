@@ -7,6 +7,10 @@ The 2026-09-24 production state (feed generated 2026-08-26, /api/health 200
 "ok") must FAIL; a fresh feed with an agreeing /api/health must PASS.
 """
 import sys
+import urllib.error
+import urllib.request
+
+import pytest
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -71,3 +75,60 @@ def test_gate_uses_the_canonical_contract_threshold():
     assert gate.contract is c
     r = run()
     assert r["max_public_manifest_age_hours"] == c.max_public_manifest_age_hours()
+
+
+@pytest.mark.parametrize("url", [
+    "http://example.com/feed",
+    "file:///etc/passwd",
+    "ftp://example.com/feed",
+    "https://user:pass@example.com/feed",
+    "https://example.com:0/feed",
+    "https://example.com:bad/feed",
+    "https://example.com/feed#fragment",
+    "https://example.com/white space",
+])
+def test_unsafe_initial_target_rejected_before_network(url, monkeypatch):
+    def unexpected_network(*args, **kwargs):
+        pytest.fail("unsafe target must not construct a network client")
+    monkeypatch.setattr(gate.urllib.request, "build_opener", unexpected_network)
+    status, body, error = gate._get_json(url, 1)
+    assert status is None and body is None and error
+
+
+@pytest.mark.parametrize("target", [
+    "http://example.com/next",
+    "https://other.example.com/next",
+    "https://example.com:444/next",
+    "https://user@example.com/next",
+])
+def test_cross_origin_or_unsafe_redirect_rejected(target):
+    handler = gate._SameOriginHTTPSRedirect()
+    request = urllib.request.Request("https://example.com/feed")
+    with pytest.raises(urllib.error.URLError):
+        handler.redirect_request(request, None, 302, "Found", {}, target)
+
+
+def test_same_https_origin_redirect_preserved():
+    handler = gate._SameOriginHTTPSRedirect()
+    request = urllib.request.Request("https://example.com/feed")
+    redirect = handler.redirect_request(
+        request, None, 302, "Found", {}, "https://example.com:443/next")
+    assert redirect.full_url == "https://example.com:443/next"
+
+
+def test_valid_https_request_keeps_headers_and_json(monkeypatch):
+    from unittest.mock import MagicMock
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.status = 200
+    response.read.return_value = b'{"status":"ok"}'
+    opener = MagicMock()
+    opener.open.return_value = response
+    build = MagicMock(return_value=opener)
+    monkeypatch.setattr(gate.urllib.request, "build_opener", build)
+    assert gate._get_json("https://example.com/feed", 3) == (200, {"status": "ok"}, None)
+    assert isinstance(build.call_args.args[0], gate._SameOriginHTTPSRedirect)
+    req = opener.open.call_args.args[0]
+    assert req.get_header("User-agent") == gate.USER_AGENT
+    assert req.get_header("Cache-control") == "no-cache"
+    assert opener.open.call_args.kwargs["timeout"] == 3
