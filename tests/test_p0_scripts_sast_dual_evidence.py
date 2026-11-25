@@ -115,3 +115,28 @@ def test_semgrep_nonzero_preserves_findings_and_fails_closed(capsys):
             with pytest.raises(RuntimeError, match="SCRIPT_SAST_SEMGREP_FAILED_OR_FOUND_ISSUES"):
                 sast.scan(root, scope)
     assert "Semgrep ERROR findings: 1" in capsys.readouterr().out
+
+
+def test_scheduled_scan_diagnostics_include_more_than_fifty_findings(capsys):
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / "scripts").mkdir()
+        sample = root / "scripts" / "sample.py"
+        sample.write_text("pass\n", encoding="utf-8")
+        scope = root / "scope.json"
+        scope.write_text(json.dumps({"targets": ["scripts/sample.py"]}))
+        def fake_run(args, **kwargs):
+            if args[0] == "bandit":
+                (root / ".scripts-sast-bandit.json").write_text(json.dumps({
+                    "results": [{"filename": str(sample), "test_id": "B310", "line_number": i}
+                                for i in range(1, 71)]
+                }))
+            else:
+                (root / ".scripts-sast-semgrep.json").write_text('{"results": []}')
+            return mock.Mock(returncode=0)
+        with mock.patch.object(sast.subprocess, "run", side_effect=fake_run):
+            with pytest.raises(RuntimeError, match="SCRIPT_SAST_BANDIT_HIGH_FINDINGS"):
+                sast.scan(root, scope)
+        output = capsys.readouterr().out
+        assert '"line": 70' in output
+        assert "Bandit high/high findings: 70" in output

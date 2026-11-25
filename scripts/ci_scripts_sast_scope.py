@@ -17,6 +17,7 @@ import sys
 
 SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 MAX_TARGETS = 2500
+MAX_DIAGNOSTIC_FINDINGS = 250
 
 
 def run(*args: str, cwd: Path, capture: bool = False) -> subprocess.CompletedProcess:
@@ -105,7 +106,9 @@ def scan(root: Path, destination: Path) -> int:
     # The previous gate only printed a count (3 at PR #814) and concealed
     # actionable rule/file/line. Do NOT dump code, secrets, or full messages.
     # Emit bounded, log-safe metadata for remediation while retaining BLOCK.
-    for finding in findings[:50]:
+    if len(findings) > MAX_DIAGNOSTIC_FINDINGS:
+        print(f"Bandit diagnostic limit: {MAX_DIAGNOSTIC_FINDINGS}/{len(findings)} locations shown", flush=True)
+    for finding in findings[:MAX_DIAGNOSTIC_FINDINGS]:
         if not isinstance(finding, dict):
             raise ValueError("SCRIPT_SAST_BANDIT_FINDING_INVALID")
         file = str(finding.get("filename", ""))
@@ -138,7 +141,9 @@ def scan(root: Path, destination: Path) -> int:
     if not isinstance(semgrep_findings, list):
         raise ValueError("SCRIPT_SAST_SEMGREP_RESULT_INVALID")
     print(f"Semgrep ERROR findings: {len(semgrep_findings)}", flush=True)
-    for finding in semgrep_findings[:50]:
+    if len(semgrep_findings) > MAX_DIAGNOSTIC_FINDINGS:
+        print(f"Semgrep diagnostic limit: {MAX_DIAGNOSTIC_FINDINGS}/{len(semgrep_findings)} locations shown", flush=True)
+    for finding in semgrep_findings[:MAX_DIAGNOSTIC_FINDINGS]:
         if not isinstance(finding, dict):
             raise ValueError("SCRIPT_SAST_SEMGREP_FINDING_INVALID")
         path = finding.get("path", "")

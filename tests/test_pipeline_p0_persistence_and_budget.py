@@ -289,3 +289,29 @@ def test_dependency_install_bootstraps_core_and_rejects_partial_install(tmp_path
     assert 'urllib3<' not in '\n'.join(calls)
     assert result.returncode == (42 if fail_requirements else 0)
     assert len(calls) == (2 if fail_requirements else 3)
+
+
+@pytest.mark.parametrize("stderr, reason", [
+    ("remote: GH013: Repository rule violations", "REPOSITORY_RULE_REJECTED"),
+    ("remote: Permission denied", "TOKEN_OR_POLICY_FORBIDDEN"),
+    ("fatal: Authentication failed", "TOKEN_AUTHENTICATION_REJECTED"),
+    ("! [rejected] (non-fast-forward)", "REVIEW_BRANCH_CONFLICT"),
+    ("fatal: Could not resolve host", "TRANSPORT_FAILURE"),
+    ("other failure", "UNKNOWN_PUSH_FAILURE"),
+])
+def test_metadata_push_diagnostics_are_fail_closed_and_redacted(tmp_path, monkeypatch, stderr, reason):
+    monkeypatch.setattr(git_sync, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    calls = []
+    def run_git(*args):
+        calls.append(args)
+        if args[0] == "rev-parse":
+            return subprocess.CompletedProcess(args, 0, "a" * 40)
+        return subprocess.CompletedProcess(args, 1, "", stderr + " https://x-access-token:offline-private-token@github.com/owner/repo")
+    monkeypatch.setattr(git_sync, "run_git", run_git)
+    with pytest.raises(RuntimeError, match=reason) as error:
+        git_sync.publish_metadata_pr("offline-private-token", "owner/repo")
+    assert "offline-private-token" not in str(error.value)
+    assert calls == [("rev-parse", "HEAD"), ("push", "origin", "HEAD:refs/heads/sentinel-generated/run-123-1")]
+    assert not (tmp_path / "data/health/git_sync_state.json").exists()

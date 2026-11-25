@@ -265,14 +265,16 @@ class DetectionDriftMonitor:
 
 if __name__=="__main__":
     logging.basicConfig(level=logging.INFO)
-    monitor = DetectionDriftMonitor(repo_root="/tmp/apex_test")
-    # Simulate current run with some results
-    mock_results = [
-        {"production_ready":True,"attack_techniques":["T1190","T1059"],
-         "rule_format":"sigma","fp_probability_score":25,"gates_passed":8,"gates_total":10,"coverage_score":70},
-        {"production_ready":True,"attack_techniques":["T1055","T1078"],
-         "rule_format":"kql","fp_probability_score":20,"gates_passed":9,"gates_total":10,"coverage_score":75},
-    ]
-    report = monitor.detect_drift(mock_results, run_id="test-run-001")
-    print(json.dumps(report.to_dict(),indent=2,default=str))
-    print(f"\n[DDM] Drift Status: {report.overall_status} | Score: {report.drift_score}")
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory(prefix="apex-drift-demo-") as demo_root:
+        monitor = DetectionDriftMonitor(repo_root=demo_root)
+        # Simulate current run with some results
+        mock_results = [
+            {"production_ready":True,"attack_techniques":["T1190","T1059"],
+             "rule_format":"sigma","fp_probability_score":25,"gates_passed":8,"gates_total":10,"coverage_score":70},
+            {"production_ready":True,"attack_techniques":["T1055","T1078"],
+             "rule_format":"kql","fp_probability_score":20,"gates_passed":9,"gates_total":10,"coverage_score":75},
+        ]
+        report = monitor.detect_drift(mock_results, run_id="test-run-001")
+        print(json.dumps(report.to_dict(),indent=2,default=str))
+        print(f"\n[DDM] Drift Status: {report.overall_status} | Score: {report.drift_score}")
