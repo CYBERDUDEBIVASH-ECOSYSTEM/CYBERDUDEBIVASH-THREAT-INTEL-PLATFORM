@@ -211,3 +211,52 @@ def test_top10_ranking_reads_epss_on_one_scale():
     high = {"epss_source": "FIRST.org", "epss_pct": 5.0, "epss_score": 5.0}
     assert gam.threat_priority_key(high)[1] > gam.threat_priority_key(low)[1]
     assert gam.threat_priority_key({"epss_score": 53})[1] == 0.0
+
+
+def test_invalid_cvss_numeric_evidence_cannot_certify_vector():
+    for value in (float("nan"), float("inf"), -1, 11, True, "nan", None):
+        item = dict(fresh(OPENCLAW), cvss_score=value)
+        assert t.verified_cvss(item) is None
+        assert t.truthful_severity(item) == ("LOW", "source")
+
+
+def test_invalid_epss_probability_never_clamped_or_published():
+    for value in (float("nan"), float("inf"), -0.01, 1.01, True, "NaN", None):
+        item = fresh(VULNERS)
+        assert t.apply_epss(item, {"CVE-2026-15583": {"epss": value}}) == "removed_no_first_record"
+        assert item["epss_score"] is None
+        assert "epss_source" not in item
+    for value, expected in ((0, 0), (1, 100), ("0.00529", 0.529)):
+        item = fresh(VULNERS)
+        assert t.apply_epss(item, {"CVE-2026-15583": {"epss": value}}) == "first"
+        assert item["epss_score"] == expected
+
+
+def test_invalid_high_score_cannot_override_valid_multi_cve_record():
+    item = {"cve_ids": ["CVE-2026-15583", "CVE-2026-57232"]}
+    records = {"CVE-2026-15583": {"epss": 99}, "CVE-2026-57232": {"epss": 0.0029}}
+    assert t.apply_epss(item, records) == "first"
+    assert item["epss_score"] == 0.29
+    assert item["epss_cve"] == "CVE-2026-57232"
+
+
+def test_nonfinite_or_boolean_legacy_score_cannot_prove_percentage():
+    for score in (float("nan"), float("inf"), True, -1, 101):
+        assert t.epss_percent({"epss_score": score, "epss": "1%"}) is None
+    assert t.epss_percent({"epss_source": "FIRST.org", "epss_pct": True}) is None
+
+
+def test_fetch_first_filters_unrequested_and_invalid_rows(monkeypatch):
+    import io
+    import json
+    payload = {"status": "OK", "data": [
+        {"cve": "CVE-2026-15583", "epss": "0.00529", "date": "2026-09-25"},
+        {"cve": "CVE-2026-57232", "epss": "NaN"},
+        {"cve": "CVE-2026-5430", "epss": "1.2"},
+        {"cve": "CVE-2026-9999", "epss": "0.99"},
+        None, [], {"cve": "CVE-2026-57232", "epss": True},
+    ]}
+    monkeypatch.setattr(t, "safe_urlopen", lambda *a, **k: io.BytesIO(json.dumps(payload).encode()))
+    assert t.fetch_first_epss(["CVE-2026-15583", "CVE-2026-57232", "CVE-2026-5430"]) == {
+        "CVE-2026-15583": {"epss": 0.00529, "date": "2026-09-25"}
+    }

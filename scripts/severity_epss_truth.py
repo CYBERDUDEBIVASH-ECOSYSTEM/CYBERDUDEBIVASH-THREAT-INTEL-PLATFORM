@@ -127,11 +127,21 @@ def cvss_rating(score: float) -> Optional[str]:
     return None  # 0.0 = None: no published severity is derived from it
 
 
+def _bounded_number(value, upper: float) -> Optional[float]:
+    """Reject malformed, boolean, non-finite and out-of-domain evidence."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and 0.0 <= number <= upper else None
+
+
 def verified_cvss(item: Dict) -> Optional[float]:
     """cvss_score when it equals the base score of its own v3.x vector."""
-    try:
-        score = float(item.get("cvss_score"))
-    except (TypeError, ValueError):
+    score = _bounded_number(item.get("cvss_score"), 10.0)
+    if score is None:
         return None
     computed = cvss3_base_score(item.get("cvss_vector") or "")
     if computed is None or abs(computed - score) > 0.05:
@@ -195,10 +205,8 @@ def _string_verified_pct(item: Dict) -> Optional[float]:
         return None
     score = item.get("epss_score")
     if score is not None:
-        try:
-            if abs(float(score) - pct) > 0.01:
-                return None
-        except (TypeError, ValueError):
+        numeric = _bounded_number(score, 100.0)
+        if numeric is None or abs(numeric - pct) > 0.01:
             return None
     return pct
 
@@ -211,13 +219,7 @@ def epss_percent(item: Dict) -> Optional[float]:
     if not isinstance(item, dict):
         return None
     if item.get("epss_source") == EPSS_SOURCE:
-        try:
-            pct = float(item.get("epss_pct"))
-            if 0.0 <= pct <= 100.0:
-                return pct
-        except (TypeError, ValueError):
-            pass
-        return None
+        return _bounded_number(item.get("epss_pct"), 100.0)
     return _string_verified_pct(item)
 
 
@@ -245,11 +247,15 @@ def fetch_first_epss(cves: Iterable[str], timeout: int = 20) -> Optional[Dict[st
                 time.sleep(2 * (attempt + 1))
         if not isinstance(data, dict) or data.get("status") != "OK" or not isinstance(data.get("data"), list):
             return None
+        requested = set(chunk)
         for row in data["data"]:
-            try:
-                out[str(row["cve"]).upper()] = {"epss": float(row["epss"]), "date": row.get("date")}
-            except (KeyError, TypeError, ValueError):
+            if not isinstance(row, dict) or not isinstance(row.get("cve"), str):
                 continue
+            cve = row["cve"].upper()
+            score = _bounded_number(row.get("epss"), 1.0)
+            if cve not in requested or score is None:
+                continue
+            out[cve] = {"epss": score, "date": row.get("date")}
     return out
 
 
@@ -266,13 +272,20 @@ def apply_epss(item: Dict, first: Optional[Dict[str, Dict]]) -> str:
     cve = cves[0] if cves else None
     if first is not None:
         # Several CVEs: the highest FIRST.org score, and which CVE it belongs to.
-        rows = [(first[c]["epss"], c) for c in cves if c in first]
-        row, cve = (first[max(rows)[1]], max(rows)[1]) if rows else (None, cve)
+        rows = []
+        for candidate in cves:
+            record = first.get(candidate)
+            if isinstance(record, dict):
+                score = _bounded_number(record.get("epss"), 1.0)
+                if score is not None:
+                    rows.append((score, candidate))
+        score, cve = max(rows) if rows else (None, cve)
+        row = first[cve] if score is not None else None
         if row is None:
             had = item.get("epss_score") is not None
             _clear_epss(item)
             return "removed_no_first_record" if had else "none"
-        pct = round(min(max(row["epss"], 0.0), 1.0) * 100.0, 4)
+        pct = round(score * 100.0, 4)
         item["epss_score"] = pct
         item["epss_pct"] = pct
         item["epss"] = fmt_pct(pct) + "%"
