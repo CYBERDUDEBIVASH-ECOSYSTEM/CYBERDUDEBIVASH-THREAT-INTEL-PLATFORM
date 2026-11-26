@@ -1240,6 +1240,18 @@ def stage_freshness_gate() -> None:
 # Stage 2.6 -- Anti-Stale Intel Hardening (v184.0 PERMANENT PRODUCTION GUARD)
 # ---------------------------------------------------------------------------
 
+def _positive_bounded_score(value, maximum: float) -> bool:
+    """Malformed upstream numeric fields are not evidence of genuine intel."""
+    import math
+    if isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(number) and 0 < number <= maximum
+
+
 def stage_anti_stale_hardening() -> None:
     """
     v184.0 ANTI-STALE INTEL HARDENING STAGE
@@ -1311,6 +1323,10 @@ def stage_anti_stale_hardening() -> None:
         clean_items = []
 
         for item in items:
+            if not isinstance(item, dict):
+                synthetic_count += 1
+                quarantine_log.append("[SCHEMA] non-object manifest entry")
+                continue
             item_id = str(item.get("id", item.get("stix_id", "?")))[:40]
             title = str(item.get("title", "")).strip()
             source = str(item.get("source", "")).strip()
@@ -1369,8 +1385,10 @@ def stage_anti_stale_hardening() -> None:
                         _sev_val = str(item.get("severity") or "").upper().strip()
                         _src_val = str(item.get("source") or item.get("feed_source") or "").strip()
                         has_severity = _sev_val not in ("", "UNKNOWN", "N/A", "NONE")
-                        has_cvss     = float(item.get("cvss_score") or 0) > 0
-                        has_epss     = float(item.get("epss_score") or 0) > 0
+                        has_cvss     = _positive_bounded_score(item.get("cvss_score"), 10.0)
+                        # Existing manifests carry both fraction and percent scales.
+                        # Here the score is only a presence signal, not a scale conversion.
+                        has_epss     = _positive_bounded_score(item.get("epss_score"), 100.0)
                         has_source   = bool(_src_val)
                         if has_real_desc or has_severity or has_cvss or has_epss or has_source:
                             log.info(
