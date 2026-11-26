@@ -85,7 +85,7 @@ PUBLIC_FIELDS: frozenset = frozenset([
     "threat_type", "tags", "ioc_count", "cve_id", "cve_ids",
     "stix_id", "_tier_notice", "_upgrade_url",
     "intelligence_origin", "apex_source_label",
-    "confidence", "tlp", "tlp_assignment", "actor_id", "actor_name",
+    "confidence", "tlp", "actor_id", "actor_name",
     "cvss_score", "epss_score", "epss_percentile",
     "kev", "kev_present", "kev_date",
     "mitre_techniques", "attack_techniques", "ttps",
@@ -106,7 +106,7 @@ PUBLIC_FIELDS: frozenset = frozenset([
 PUBLIC_LATEST_FIELDS: frozenset = (
     PUBLIC_FIELDS | frozenset({
         "description", "source_url", "blog_url", "actor_display_name",
-        "mitre_tactics",
+        "mitre_tactics", "tlp_assignment",
     })
 ) - PREMIUM_FIELDS
 
@@ -207,6 +207,8 @@ def _public_ioc_paywall(value: Any) -> dict | None:
 
 
 def _project_public_latest_field(key: str, value: Any) -> Any:
+    if key == "tlp_assignment":
+        return value if value == "policy_first_party_public_source" else None
     if key in _PUBLIC_SIMPLE_LISTS:
         return _public_text_list(value)
     if key in _PUBLIC_TECHNIQUE_LISTS:
