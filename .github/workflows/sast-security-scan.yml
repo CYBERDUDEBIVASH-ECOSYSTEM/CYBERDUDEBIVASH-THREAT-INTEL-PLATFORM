@@ -835,7 +835,11 @@ jobs:
     # the scan the same way the pull_request trigger already does, instead
     # of raising this timeout indefinitely to accommodate a full scan that
     # was never the intent.
-    timeout-minutes: 20
+    # P0 (2026-11-26): scheduled full-history scan 45744823949 was
+    # cancelled at the 20-minute job limit. Give only the scheduled audit
+    # a bounded 40-minute budget. Keep PR, push and manual limits unchanged;
+    # do not alter the scan range, scanner flags or fail-closed result gate.
+    timeout-minutes: ${{ github.event_name == 'schedule' && 40 || 20 }}
 
     steps:
       - name: Checkout
