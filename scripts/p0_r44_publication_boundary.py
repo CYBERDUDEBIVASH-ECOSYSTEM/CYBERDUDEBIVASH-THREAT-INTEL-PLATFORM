@@ -12,7 +12,7 @@ from pathlib import Path
 
 from manifest_reconciler import reconcile, _atomic_write
 from p0_r35_feed_prewrite_guard import assert_publishable, select_publishable
-from tlp_policy import partition_publishable
+from tlp_policy import partition_publishable, load_policy, materialize_nvd_public_classification
 from public_api_sanitizer import _remove_invalid_stix_alias
 from evidence_score_enforcer import compute_evidence_tier, backfill_governance_fields
 from severity_epss_truth import epss_percent
@@ -105,7 +105,10 @@ def finalize_public_feed(root: Path) -> dict:
     # Anonymous feeds must never claim an internal intel-- key is a STIX object.
     # Preserve id and valid STIX identifiers; scrub only invalid aliases from
     # the two public feed copies, without mutating the reconciled inventory.
-    public_selected = [dict(record) for record in selected]
+    # Materialize only the policy-authorized NVD metadata classification on public copies.
+    # Internal reconciliation above retains the original source records.
+    policy = load_policy()
+    public_selected = [materialize_nvd_public_classification(record, policy) for record in selected]
     for record in public_selected:
         _remove_invalid_stix_alias(record)
     public_selected, risk_adjustments = enforce_public_risk_truth(public_selected)
