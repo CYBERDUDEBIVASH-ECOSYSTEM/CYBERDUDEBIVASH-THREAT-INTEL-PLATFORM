@@ -55,6 +55,19 @@ class PlaywrightRunnerCompatibilityTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.merged == true", source)
         self.assertIn("github.ref == 'refs/heads/main'", source)
 
+    def test_report_gate_has_bounded_browser_install_headroom(self):
+        source = self.sources["report"]
+        # A slow OS dependency mirror must not consume the whole job budget;
+        # keep both the job and the installation step explicitly bounded.
+        self.assertRegex(source, r"(?m)^    timeout-minutes: 15$")
+        self.assertRegex(
+            source,
+            r"(?m)^      - name: Install browser for P0 customer freshness regressions\n"
+            r"        timeout-minutes: 10\n        run: \|$",
+        )
+        self.assertIn("cancel-in-progress: true", source)
+        self.assertNotIn("continue-on-error: true", source)
+
     def test_report_gate_executes_this_contract(self):
         self.assertIn(
             "python -m unittest discover -s tests "
