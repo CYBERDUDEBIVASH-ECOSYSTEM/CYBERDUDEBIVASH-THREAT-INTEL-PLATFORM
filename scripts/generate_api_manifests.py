@@ -504,7 +504,7 @@ info(f'Written: {OUT_DIR}/latest_pro.json ({len(sorted_feed_pro)} items, sha256=
 top10_items_raw = sorted(deduped_feed, key=threat_priority_key, reverse=True)[:TOP10_COUNT]
 top10_items = _sanitize_feed(top10_items_raw)
 _t10_kev  = sum(1 for it in top10_items if str(it.get('kev','') or '').upper() in ('YES','TRUE','1'))
-_t10_high = sum(1 for it in top10_items if it.get('severity','').upper() in ('CRITICAL','HIGH'))
+_t10_high = sum(1 for it in top10_items if str(it.get('severity') or '').upper() in ('CRITICAL','HIGH'))
 info(f'Top10 by threat priority: kev_count={_t10_kev} high_critical={_t10_high} '
      f'top_sev={top10_items[0].get("severity","?") if top10_items else "N/A"}')
 

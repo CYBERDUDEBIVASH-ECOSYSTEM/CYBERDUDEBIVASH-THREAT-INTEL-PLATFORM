@@ -33,6 +33,8 @@ the item and the policy file, so producers, publishers and feed writers agree.
 from __future__ import annotations
 
 import json
+import math
+from datetime import datetime
 import re
 import unicodedata
 from pathlib import Path
@@ -116,8 +118,17 @@ def load_policy(path: Path = POLICY_PATH) -> Dict[str, Any]:
                     or not isinstance(e.get("hosts"), list) or not e["hosts"]
                     or not all(isinstance(h, str) and h.strip() for h in e["hosts"])):
                 return dict(_DEFAULT_POLICY)
-            entries.append({"source": e["source"].strip().lower(),
-                            "hosts": sorted({h.strip().lower().lstrip(".") for h in e["hosts"]})})
+            entry = {"source": e["source"].strip().lower(),
+                     "hosts": sorted({h.strip().lower().lstrip(".") for h in e["hosts"]})}
+            if "projection" in e:
+                if (e["projection"] != "nvd_metadata_v1" or entry["source"] != "nist nvd"
+                        or entry["hosts"] != ["nvd.nist.gov"]):
+                    return dict(_DEFAULT_POLICY)
+                entry["projection"] = e["projection"]
+            # NVD metadata authorization must never silently downgrade to a broad host allowlist.
+            if entry["source"] == "nist nvd" and entry.get("projection") != "nvd_metadata_v1":
+                return dict(_DEFAULT_POLICY)
+            entries.append(entry)
         return {"legacy_white_treated_as_clear": raw.get("legacy_white_treated_as_clear") is True,
                 "first_party_public_sources": entries}
     except (OSError, ValueError, AttributeError):
@@ -150,6 +161,89 @@ def _source_host(item: Dict[str, Any]) -> str:
     return ""
 
 
+# This narrow exception is a publication-policy check, not a cryptographic
+# attestation of collector identity or an independent release authorization.
+# The trusted producer must still verify the source bytes and all release gates.
+_NVD_CVE = re.compile(r"CVE-[0-9]{4}-[0-9]{4,}")
+_NVD_HEX = re.compile(r"[0-9a-f]{64}")
+_NVD_ID = re.compile(r"intel--[0-9a-f]{16}")
+_NVD_METADATA_FIELDS = frozenset({
+    "id", "cve_id", "cve_ids", "cves", "title", "description", "source",
+    "source_name", "feed_source", "source_url", "published_at", "publication_timestamp",
+    "timestamp", "retrieval_timestamp", "source_modified_at", "content_hash",
+    "content_hash_scope", "trust_score", "evidence_count", "corroboration_count",
+    "cvss_score", "cvss_version", "cvss_vector", "cvss_severity", "metric_validation",
+    "risk_score", "severity", "epss_score", "kev_status", "vuln_status",
+    "threat_type", "iocs", "ioc_count", "is_published",
+})
+
+
+def _nvd_metadata_projection(item: Dict[str, Any]) -> bool:
+    """Only an already release-qualified, factual metadata projection is eligible.
+
+    Never authorize raw source documents, arbitrary prose, unverified metrics,
+    review-only state, upstream classifications, or unknown additional fields.
+    The NVD entry is deliberately not a general source/hostname permission.
+    """
+    if set(item) != _NVD_METADATA_FIELDS or item.get("is_published") is not True:
+        return False
+    cve = item.get("cve_id")
+    if not isinstance(cve, str) or not _NVD_CVE.fullmatch(cve):
+        return False
+    if not isinstance(item.get("id"), str) or not _NVD_ID.fullmatch(item["id"]):
+        return False
+    if (item["source"] != "NIST NVD" or item["source_name"] != "NIST NVD"
+            or item["feed_source"] != "nvd_cve"
+            or item["source_url"] != "https://nvd.nist.gov/vuln/detail/" + cve
+            or item["cve_ids"] != [cve] or item["cves"] != [cve]
+            or item["title"] != cve + " — NVD vulnerability record"
+            or item["description"] != (
+                f"NVD lists {cve}. Review the linked vulnerability record and vendor guidance for affected products and remediation."
+            )):
+        return False
+    if (not isinstance(item["content_hash"], str) or not _NVD_HEX.fullmatch(item["content_hash"])
+            or item["content_hash_scope"] != "canonical_nvd_record_sha256"
+            or type(item["evidence_count"]) is not int or item["evidence_count"] != 1
+            or type(item["corroboration_count"]) is not int or item["corroboration_count"] != 0
+            or type(item["trust_score"]) not in (int, float) or item["trust_score"] != 9.0
+            or item["threat_type"] != "CVE" or item["iocs"] != []
+            or type(item["ioc_count"]) is not int or item["ioc_count"] != 0
+            or item["kev_status"] != "unverified"
+            or item["vuln_status"] not in ("Received", "Awaiting Analysis", "Deferred", "Analyzed", "Modified", "Undergoing Analysis")
+            or any(item[k] is not None for k in ("risk_score", "severity", "epss_score"))):
+        return False
+    try:
+        if not all(isinstance(item[k], str) and "T" in item[k] for k in
+                   ("published_at", "retrieval_timestamp", "source_modified_at")):
+            return False
+        pub, modified, retrieved = (datetime.fromisoformat(item[k].replace("Z", "+00:00")) for k in
+                                    ("published_at", "source_modified_at", "retrieval_timestamp"))
+        if (any(t.tzinfo is None for t in (pub, modified, retrieved)) or not pub <= modified <= retrieved
+                or item["published_at"] != item["publication_timestamp"] or item["timestamp"] != item["published_at"]):
+            return False
+    except (ValueError, TypeError, OverflowError):
+        return False
+    score = item["cvss_score"]
+    if score is None:
+        return (item["metric_validation"] == "METRIC_REVIEW_REQUIRED"
+                and all(item[k] is None for k in ("cvss_version", "cvss_vector", "cvss_severity")))
+    if type(score) not in (int, float) or not 0 <= score <= 10 or not math.isfinite(score):
+        return False
+    band = "NONE" if score == 0 else "LOW" if score < 4 else "MEDIUM" if score < 7 else "HIGH" if score < 9 else "CRITICAL"
+    vector = item["cvss_vector"]
+    if not isinstance(vector, str) or len(vector) > 100:
+        return False
+    parts = vector.split("/")
+    if len(parts) != 9 or parts[0] != "CVSS:3.1":
+        return False
+    metrics = dict(p.split(":", 1) for p in parts[1:] if ":" in p)
+    allowed = {"AV": "NALP", "AC": "LH", "PR": "NLH", "UI": "NR",
+               "S": "UC", "C": "NLH", "I": "NLH", "A": "NLH"}
+    return (set(metrics) == set(allowed) and all(len(v) == 1 and v in allowed[k] for k, v in metrics.items())
+            and item["cvss_version"] == "3.1" and item["cvss_severity"] == band
+            and item["metric_validation"] == "CVSS31_ARITHMETIC_VERIFIED")
+
+
 def _approved_collector(item: Dict[str, Any], pol: Dict[str, Any]) -> bool:
     """True only when the item's source id AND its source-URL host both match one operator-approved entry."""
     src = str(item.get("source") or item.get("feed_source") or "").strip().lower()
@@ -158,6 +252,11 @@ def _approved_collector(item: Dict[str, Any], pol: Dict[str, Any]) -> bool:
         return False
     for e in pol.get("first_party_public_sources", []):
         if not isinstance(e, dict) or e.get("source") != src:
+            continue
+        if src == "nist nvd":
+            if (e.get("projection") == "nvd_metadata_v1" and e.get("hosts") == ["nvd.nist.gov"]
+                    and host == "nvd.nist.gov" and _nvd_metadata_projection(item)):
+                return True
             continue
         if any(host == h or host.endswith("." + h) for h in e.get("hosts", [])):
             return True
@@ -234,6 +333,19 @@ def publication_decision(item: Any, policy: Dict[str, Any] | None = None) -> Dic
     if _approved_collector(it, pol):
         return allow("TLP:CLEAR", "policy_first_party_public_source")
     return deny("MISSING_LABEL", "no TLP label and collector (source id + source-URL host) not approved as first-party public")
+
+
+def materialize_nvd_public_classification(item: Dict[str, Any], policy: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a public copy; never relabel the internal source or a denied record."""
+    out = dict(item)
+    decision = publication_decision(item, policy)
+    if not decision["allowed"]:
+        raise ValueError("P0_PUBLIC_CLASSIFICATION_DENIED: " + decision["reason_code"])
+    if (decision["assignment"] == "policy_first_party_public_source"
+            and item.get("source") == "NIST NVD"):
+        out["tlp"] = decision["label"]
+        out["tlp_assignment"] = decision["assignment"]
+    return out
 
 
 def partition_publishable(items: Iterable[Any], policy: Dict[str, Any] | None = None

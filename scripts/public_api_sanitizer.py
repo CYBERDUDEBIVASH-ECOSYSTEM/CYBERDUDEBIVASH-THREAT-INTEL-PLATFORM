@@ -106,7 +106,7 @@ PUBLIC_FIELDS: frozenset = frozenset([
 PUBLIC_LATEST_FIELDS: frozenset = (
     PUBLIC_FIELDS | frozenset({
         "description", "source_url", "blog_url", "actor_display_name",
-        "mitre_tactics",
+        "mitre_tactics", "tlp_assignment",
     })
 ) - PREMIUM_FIELDS
 
@@ -207,6 +207,8 @@ def _public_ioc_paywall(value: Any) -> dict | None:
 
 
 def _project_public_latest_field(key: str, value: Any) -> Any:
+    if key == "tlp_assignment":
+        return value if value == "policy_first_party_public_source" else None
     if key in _PUBLIC_SIMPLE_LISTS:
         return _public_text_list(value)
     if key in _PUBLIC_TECHNIQUE_LISTS:
