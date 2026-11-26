@@ -508,14 +508,16 @@ def build_forecasts(
         risk_level = (sec.get("risk_level") or "MEDIUM").upper()
         trend = (sec.get("trend") or "STABLE").upper()
 
-        # Probability = normalized peak_risk × confidence
-        prob = int(min(99, max(10, round(peak_risk * 10 * confidence))))
+        # Risk-weighted daily intensity and 1-MASE skill are not a
+        # calibrated event probability. Keep the legacy key but mark the
+        # quantity unavailable instead of inventing a percentage.
 
         forecasts.append({
             "sector"      : sector_name,
             "current_risk": round(current_risk, 2),
             "peak_risk"   : round(peak_risk, 2),
-            "prob"        : prob,
+            "prob"        : None,
+            "probability_status": "NOT_ESTIMATED",
             "risk_level"  : risk_level,
             "trend"       : trend,
             "trend_pct"   : round(float(sec.get("trend_pct") or 0), 1),
@@ -529,7 +531,7 @@ def build_forecasts(
         log.warning("[EVIDENCE] %d sector(s) carry no publishable forecast, skipped: %s",
                     len(declined_sectors), ", ".join(sorted(declined_sectors)))
 
-    forecasts.sort(key=lambda f: (-sv_map.get(f["risk_level"], 0), -f["prob"]))
+    forecasts.sort(key=lambda f: (-sv_map.get(f["risk_level"], 0), -f["peak_risk"], f["sector"]))
     return forecasts[:MAX_FORECASTS]
 
 
@@ -777,7 +779,8 @@ def main() -> int:
         (i.get("severity") or "MEDIUM").upper() for i in feed
     )
     zero_day_count = sum(1 for a in anomalies if a.get("is_zero_day_candidate"))
-    max_prob = max((f["prob"] for f in forecasts), default=0)
+    # No sector event probability is estimated by the intensity model.
+    max_prob = None
     top_sector = forecasts[0]["sector"] if forecasts else "Unknown"
 
     ai_telemetry = {
