@@ -155,3 +155,46 @@ def test_rss_reason_uses_fetch_outcome_clock_not_publication_cursor():
     # Legacy entries without the outcome timestamp keep their cursor fallback.
     del state["rss_vendor_a"]["last_reason_at"]
     assert sfh._feed_state_reason_code("rss:*", state) == "OK"
+
+
+def test_future_manifest_event_cannot_make_source_healthy(monkeypatch):
+    now = datetime.now(timezone.utc)
+    future = {"feed_source": "rss_vendor_example", "published_at": (now + timedelta(days=30)).isoformat()}
+    result = _audit(monkeypatch, [future])
+    assert result["health_breakdown"]["HEALTHY"] == 0
+    assert result["sources"][0]["last_event"] is None
+    old = {"feed_source": "rss_vendor_example", "published_at": (now - timedelta(days=5)).isoformat()}
+    result = _audit(monkeypatch, [old, future])
+    assert result["health_breakdown"]["STALE"] == 1
+    assert result["sources"][0]["age_hours"] >= 119
+
+
+def test_future_feed_cursor_cannot_hide_older_valid_cursor():
+    now = datetime.now(timezone.utc)
+    older = now - timedelta(days=5)
+    future = now + timedelta(days=30)
+    state = {
+        "rss_vendor_future": {"last_seen": future.isoformat()},
+        "rss_vendor_old": {"last_seen": older.isoformat()},
+        "nvd_cve": {"last_seen": future.isoformat()},
+    }
+    assert sfh._feed_state_last_seen("rss:*", state, now=now) == older
+    assert sfh._feed_state_last_seen("nvd_cve", state, now=now) is None
+    del state["rss_vendor_old"]
+    assert sfh._feed_state_last_seen("rss:*", state, now=now) is None
+
+
+def test_future_reference_sync_does_not_certify_health(monkeypatch):
+    source = dict(_source(), source_id="mitre_attack", integration_mode="REFERENCE_SYNC",
+                  pipeline_feed_source_key="mitre_attack")
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(sfh, "load_registry", lambda: {"registry_version": "test-only"})
+    monkeypatch.setattr(sfh, "all_sources", lambda: [source])
+    monkeypatch.setattr(sfh, "_load_json_safe", lambda path: (
+        {"synced_at": (now + timedelta(days=30)).isoformat(), "counts": {"techniques": 1}}
+        if path == sfh.ATTCK_PATH else None
+    ))
+    result = sfh.compute_health()
+    assert result["health_breakdown"]["HEALTHY"] == 0
+    assert result["sources"][0]["health_status"] == "NO_DATA"
+    assert result["sources"][0]["last_event"] is None

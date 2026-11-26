@@ -109,7 +109,8 @@ def _match_manifest_key(pipeline_key: str, feed_source: str) -> bool:
     return pipeline_key == feed_source
 
 
-def _feed_state_last_seen(pipeline_key: str, feed_state_sources: Dict[str, Any]) -> Optional[datetime]:
+def _feed_state_last_seen(pipeline_key: str, feed_state_sources: Dict[str, Any],
+                          *, now: Optional[datetime] = None) -> Optional[datetime]:
     """
     Resolves a source's most recent feed_state cursor. For a plain
     pipeline_feed_source_key this is a direct dict lookup; for an "rss:"
@@ -119,14 +120,17 @@ def _feed_state_last_seen(pipeline_key: str, feed_state_sources: Dict[str, Any])
     matches, so RSS-bucketed registry entries still get real freshness data
     instead of silently falling back to "never seen."
     """
+    # A future cursor cannot establish that a source has already emitted data.
+    cutoff = now if now is not None else datetime.now(timezone.utc)
     if not pipeline_key.startswith("rss:"):
-        return _parse_ts(feed_state_sources.get(pipeline_key, {}).get("last_seen"))
+        ts = _parse_ts(feed_state_sources.get(pipeline_key, {}).get("last_seen"))
+        return ts if ts is not None and ts <= cutoff else None
 
     newest: Optional[datetime] = None
     for key, entry in feed_state_sources.items():
         if _match_manifest_key(pipeline_key, key):
             ts = _parse_ts(entry.get("last_seen"))
-            if ts and (newest is None or ts > newest):
+            if ts and ts <= cutoff and (newest is None or ts > newest):
                 newest = ts
     return newest
 
@@ -331,7 +335,7 @@ def compute_health() -> Dict[str, Any]:
             or entry.get("_source_published_at")
             or entry.get("published_at")
         )
-        if item_ts and (bucket["latest_ts"] is None or item_ts > bucket["latest_ts"]):
+        if item_ts and item_ts <= now and (bucket["latest_ts"] is None or item_ts > bucket["latest_ts"]):
             bucket["latest_ts"] = item_ts
 
     results: List[Dict[str, Any]] = []
@@ -348,7 +352,7 @@ def compute_health() -> Dict[str, Any]:
             rss_state_by_source.get(sid, {})
             if pipeline_key.startswith("rss:") else feed_state_sources
         )
-        fs_last_seen = _feed_state_last_seen(pipeline_key, source_state)
+        fs_last_seen = _feed_state_last_seen(pipeline_key, source_state, now=now)
         fs_reason_code = _feed_state_reason_code(pipeline_key, source_state)
 
         # ATT&CK is REFERENCE_SYNC, not manifest-tracked -- health comes from
@@ -357,6 +361,8 @@ def compute_health() -> Dict[str, Any]:
         records_received = manifest_bucket["manifest_count"]
         if s["integration_mode"] == "REFERENCE_SYNC" and sid == "mitre_attack" and attck_ref:
             last_event = _parse_ts(attck_ref.get("synced_at"))
+            if last_event is not None and last_event > now:
+                last_event = None
             records_received = sum(attck_ref.get("counts", {}).values())
 
         if status not in ("ACTIVE", "IMPLEMENTED"):
@@ -426,6 +432,15 @@ def main() -> int:
     print(f"[source-fabric-health] {report['total_sources']} sources, "
           f"{report['live_or_implemented_sources']} live/implemented")
     print(f"[source-fabric-health] health breakdown: {report['health_breakdown']}")
+    # Bounded by the registered source list; log no raw source payloads,
+    # URLs, credentials or upstream response bodies. Expose only the fields
+    # needed to investigate the current stale/no-data sources.
+    for source in report["sources"]:
+        if source["health_status"] in ("STALE", "NO_DATA", "DEGRADED"):
+            print(f"[source-fabric-health] source={source['source_id']} "
+                  f"health={source['health_status']} "
+                  f"age_hours={source['age_hours']} "
+                  f"records={source['records_received_current_window']}")
     if report["manifest_unmatched_feed_sources"]:
         print(f"[source-fabric-health] WARNING: {len(report['manifest_unmatched_feed_sources'])} "
               f"manifest feed_source value(s) not matched to any registry entry: "
