@@ -315,3 +315,38 @@ def test_metadata_push_diagnostics_are_fail_closed_and_redacted(tmp_path, monkey
     assert "offline-private-token" not in str(error.value)
     assert calls == [("rev-parse", "HEAD"), ("push", "origin", "HEAD:refs/heads/sentinel-generated/run-123-1")]
     assert not (tmp_path / "data/health/git_sync_state.json").exists()
+
+
+@pytest.mark.parametrize("value", ["invalid", True, "NaN", "Infinity", -1, 101, {}, []])
+def test_antistale_numeric_presence_rejects_untrusted_scores(value):
+    import run_pipeline as pipeline
+    assert not pipeline._positive_bounded_score(value, 10.0)
+    assert not pipeline._positive_bounded_score(value, 100.0)
+    assert pipeline._positive_bounded_score("9.8", 10.0)
+    assert pipeline._positive_bounded_score("0.005", 100.0)
+    assert pipeline._positive_bounded_score(100, 100.0)
+
+
+def test_antistale_malformed_record_does_not_disable_rest_of_stage(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    import run_pipeline as pipeline
+    monkeypatch.setattr(pipeline, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(pipeline, "_SAFE_IO_AVAILABLE", False)
+    path = tmp_path / "data/stix/feed_manifest.json"
+    path.parent.mkdir(parents=True)
+    now = datetime.now(timezone.utc).isoformat()
+    genuine = [{"id": f"valid-{i}", "title": f"Reviewed advisory {i}",
+                "published_at": now, "severity": "HIGH", "source": "NVD"}
+               for i in range(10)]
+    valid_bare = {"id": "valid-bare", "title": "CVE-2026-12345", "source": "NVD",
+                  "published_at": now, "cvss_score": "malformed"}
+    invalid_bare = {"id": "invalid-bare", "title": "CVE-2026-54321",
+                    "cvss_score": "Infinity", "epss_score": True}
+    placeholder = {"id": "placeholder", "title": "PLACEHOLDER test"}
+    path.write_text(json.dumps({"advisories": [invalid_bare, None, valid_bare, placeholder, *genuine]}),
+                    encoding="utf-8")
+    pipeline.stage_anti_stale_hardening()
+    result = json.loads(path.read_text(encoding="utf-8"))
+    assert {row["id"] for row in result["advisories"]} == {"valid-bare", *(row["id"] for row in genuine)}
+    assert result["anti_stale_quarantined"] == 3
+    assert result["entry_count"] == 11
