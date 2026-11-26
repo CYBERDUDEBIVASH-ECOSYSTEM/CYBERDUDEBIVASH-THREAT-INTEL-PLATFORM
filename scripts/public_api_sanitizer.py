@@ -85,7 +85,7 @@ PUBLIC_FIELDS: frozenset = frozenset([
     "threat_type", "tags", "ioc_count", "cve_id", "cve_ids",
     "stix_id", "_tier_notice", "_upgrade_url",
     "intelligence_origin", "apex_source_label",
-    "confidence", "tlp", "actor_id", "actor_name",
+    "confidence", "tlp", "tlp_assignment", "actor_id", "actor_name",
     "cvss_score", "epss_score", "epss_percentile",
     "kev", "kev_present", "kev_date",
     "mitre_techniques", "attack_techniques", "ttps",
