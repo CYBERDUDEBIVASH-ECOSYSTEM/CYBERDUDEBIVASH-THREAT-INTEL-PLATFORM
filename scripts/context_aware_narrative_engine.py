@@ -461,7 +461,7 @@ def _narrative_threat_actor(item: Dict[str, Any]) -> str:
     if tactic_phases:
         phase_str = (
             f" The attack chain spans <strong>{len(tactic_phases)}</strong> tactical phases: "
-            f"{', '.join(tactic_phases)}."
+            f"{', '.join(_h(t) for t in tactic_phases)}."
         )
 
     # Exploitation urgency

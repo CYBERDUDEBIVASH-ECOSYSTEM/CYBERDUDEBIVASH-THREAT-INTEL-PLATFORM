@@ -75,6 +75,15 @@ except Exception as _ece_import_err:
 
 # ── v152.0 P0 FIX: HTML strip utility ────────────────────────────────────────
 import html as _html_mod_apex
+from urllib.parse import quote as _url_quote
+
+
+def _esc(value: Any) -> str:
+    """HTML-escape an item-derived value for text and quoted-attribute contexts.
+
+    Report fields originate in third-party feeds; they must never reach the page as markup.
+    """
+    return _html_mod_apex.escape("" if value is None else str(value), quote=True)
 def _strip_html(text: str) -> str:
     """Strip HTML tags and decode entities — prevents HTML leaking into JSON."""
     if not isinstance(text, str):
@@ -514,7 +523,7 @@ def generate_technical_narrative(item: Dict[str, Any]) -> str:
                     if tac and tac not in tactic_names:
                         tactic_names.append(tac)
             if tactic_names:
-                ttp_action = f" The observed ATT&CK technique sequence traverses: {', '.join(tactic_names)}."
+                ttp_action = f" The observed ATT&CK technique sequence traverses: {', '.join(_esc(n) for n in tactic_names)}."
 
         # Severity-specific context
         sev_context = {
@@ -549,7 +558,7 @@ def generate_technical_narrative(item: Dict[str, Any]) -> str:
 
         html = (
             f"<div class='apex-narrative'>"
-            f"<p>Structural and behavioural analysis of <strong>{product}</strong> reveals a "
+            f"<p>Structural and behavioural analysis of <strong>{_esc(product)}</strong> reveals a "
             f"<strong>{vuln_class.replace('_', ' ').title()}</strong> class vulnerability that "
             f"{sev_context}.{kev_context}{cvss_context}</p>"
             f"<div class='apex-intel-grid'>"
@@ -567,7 +576,7 @@ def generate_technical_narrative(item: Dict[str, Any]) -> str:
             f"proxy logs, EDR process telemetry, and authentication events. "
             f"{ioc_count} IOC observable{'s' if ioc_count != 1 else ''} extracted at analysis time "
             f"({item.get('_ioc_validated', 0) if isinstance(item.get('_ioc_validated'), int) else 0} validated as malicious)."
-            f"{' Actor cluster <strong>' + actor + '</strong> attribution maintained across prior campaign activity.' if actor and actor not in ('Unknown Cluster', 'CDB-CVE-GEN', 'UNATTRIBUTED') and not str(actor).upper().startswith(('CDB-UNATTR', 'UNC-', 'UNKNOWN')) else ''}"
+            f"{' Actor cluster <strong>' + _esc(actor) + '</strong> attribution maintained across prior campaign activity.' if actor and actor not in ('Unknown Cluster', 'CDB-CVE-GEN', 'UNATTRIBUTED') and not str(actor).upper().startswith(('CDB-UNATTR', 'UNC-', 'UNKNOWN')) else ''}"
             f"</p>"
             f"</div>"
         )
@@ -808,26 +817,26 @@ def render_ttps_premium(ttps: list, item: Dict[str, Any]) -> str:
                 # Confidence badge
                 conf = t.get("confidence") or "HIGH"
                 conf_class = "high" if str(conf).upper() in ("HIGH", "CONFIRMED") else "med"
-                att_url = f"https://attack.mitre.org/techniques/{tid.replace('.', '/')}/"
+                att_url = "https://attack.mitre.org/techniques/" + _url_quote(str(tid).replace('.', '/'), safe='/') + "/"
                 rows.append(
                     f"<tr>"
-                    f"<td><a href='{att_url}' target='_blank' rel='noopener' "
-                    f"style='color:var(--accent2);font-family:monospace'>{tid}</a></td>"
-                    f"<td><strong>{nm}</strong><br>"
-                    f"<span style='font-size:0.82em;opacity:0.78'>{just[:200]}</span></td>"
-                    f"<td><span class='sev-chip'>{tac}</span></td>"
-                    f"<td><span class='apex-conf-{conf_class}'>{conf}</span></td>"
+                    f"<td><a href='{_esc(att_url)}' target='_blank' rel='noopener' "
+                    f"style='color:var(--accent2);font-family:monospace'>{_esc(tid)}</a></td>"
+                    f"<td><strong>{_esc(nm)}</strong><br>"
+                    f"<span style='font-size:0.82em;opacity:0.78'>{_esc(str(just)[:200])}</span></td>"
+                    f"<td><span class='sev-chip'>{_esc(tac)}</span></td>"
+                    f"<td><span class='apex-conf-{conf_class}'>{_esc(conf)}</span></td>"
                     f"</tr>"
                 )
             elif isinstance(t, str):
                 info = resolve_technique(t)
-                att_url = f"https://attack.mitre.org/techniques/{t.replace('.', '/')}/"
+                att_url = "https://attack.mitre.org/techniques/" + _url_quote(str(t).replace('.', '/'), safe='/') + "/"
                 rows.append(
-                    f"<tr><td><a href='{att_url}' target='_blank' rel='noopener' "
-                    f"style='color:var(--accent2);font-family:monospace'>{info['id']}</a></td>"
-                    f"<td><strong>{info['name']}</strong><br>"
-                    f"<span style='font-size:0.82em;opacity:0.78'>{info.get('desc','')[:200]}</span></td>"
-                    f"<td><span class='sev-chip'>{info['tactic']}</span></td>"
+                    f"<tr><td><a href='{_esc(att_url)}' target='_blank' rel='noopener' "
+                    f"style='color:var(--accent2);font-family:monospace'>{_esc(info['id'])}</a></td>"
+                    f"<td><strong>{_esc(info['name'])}</strong><br>"
+                    f"<span style='font-size:0.82em;opacity:0.78'>{_esc(str(info.get('desc',''))[:200])}</span></td>"
+                    f"<td><span class='sev-chip'>{_esc(info['tactic'])}</span></td>"
                     f"<td><span class='apex-conf-high'>HIGH</span></td></tr>"
                 )
 
@@ -1919,11 +1928,11 @@ def generate_ai_insight_premium(item: Dict[str, Any]) -> str:
             f"<div class='apex-intel-item'><span class='apex-label'>Evidence-led triage (no timeline forecast)</span>"
             f"<span class='apex-value'><strong>{escalation}</strong></span></div>"
             f"<div class='apex-intel-item'><span class='apex-label'>Attribution label (not verified here)</span>"
-            f"<span class='apex-value'><code>{actor or 'APEX-CLUSTER-UNATTRIBUTED'}</code></span></div>"
+            f"<span class='apex-value'><code>{_esc(actor or 'APEX-CLUSTER-UNATTRIBUTED')}</code></span></div>"
             f"<div class='apex-intel-item'><span class='apex-label'>Heuristic signal index</span>"
             f"<span class='apex-value'>{ai_conf:.1f}/100 — not a probability or calibrated confidence</span></div>"
             f"<div class='apex-intel-item'><span class='apex-label'>ATT&amp;CK tactic categories</span>"
-            f"<span class='apex-value'>{' → '.join(tactic_names) if tactic_names else 'No evidenced TTP chain available'}</span></div>"
+            f"<span class='apex-value'>{' → '.join(_esc(n) for n in tactic_names) if tactic_names else 'No evidenced TTP chain available'}</span></div>"
             f"<div class='apex-intel-item'><span class='apex-label'>Sector considerations (not customer exposure)</span>"
             f"<span class='apex-value'>{' | '.join(sector_risks[:2])}</span></div>"
             f"</div>"
