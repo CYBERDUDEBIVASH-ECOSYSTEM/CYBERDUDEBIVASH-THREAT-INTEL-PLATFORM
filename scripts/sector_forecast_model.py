@@ -426,6 +426,19 @@ def select_and_forecast(
                 coverage=round(coverage, 3),
             )
 
+    # The store interpolates interior gaps using both adjacent observations
+    # before we split the series into rolling training/holdout windows.
+    # Such a point can leak a holdout observation into training, or be scored
+    # as an actual outcome. The current backtester has no observation mask.
+    # Fail closed rather than claim validated skill on imputed data.
+    if actual_observed != actual_span:
+        return decline(
+            "interpolated history requires gap-aware rolling-origin validation; "
+            "no forecast is published until validation uses observed outcomes "
+            "without look-ahead leakage",
+            coverage=round(actual_observed / float(actual_span), 3),
+        )
+
     # Enough room to both fit and validate: at least two seasonal cycles of
     # training data before the first origin, and at least three origins.
     min_train = max(2 * SEASONAL_PERIOD, min_history - horizon, horizon)

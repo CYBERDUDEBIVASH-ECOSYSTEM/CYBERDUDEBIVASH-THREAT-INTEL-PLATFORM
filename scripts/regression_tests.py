@@ -2319,6 +2319,29 @@ def t39():
     sparse = fm.select_and_forecast(seasonal[:120], horizon=14, observed_days=40)
     assert not sparse["publishable"] and "coverage" in sparse["reason"]
 
+    # Both the observed-day floor and 80% coverage can pass while the
+    # globally interpolated series still leaks future observations.
+    # Prove that the actual candidate scorer is never reached for this case.
+    from unittest.mock import patch as _patch
+    with _patch.object(fm, "rolling_origin_backtest",
+                       side_effect=AssertionError("imputed data reached scorer")) as scorer:
+        imputed = fm.select_and_forecast(
+            seasonal, horizon=14, observed_days=119, span_days=120
+        )
+        assert not imputed["publishable"] and "forecast" not in imputed
+        assert "gap-aware rolling-origin validation" in imputed["reason"]
+        assert not scorer.called, "interpolated data entered backtesting"
+        omitted_span = fm.select_and_forecast(
+            seasonal, horizon=14, observed_days=119
+        )
+        assert not omitted_span["publishable"] and "forecast" not in omitted_span
+        assert not scorer.called
+    # Fully observed data keeps the existing positive forecast path.
+    observed = fm.select_and_forecast(
+        seasonal, horizon=14, observed_days=120, span_days=120
+    )
+    assert observed == ok, "fully observed forecast behavior changed"
+
     # --- Backtesting must never score a model on data it was fitted on. ---
     seen = []
 
