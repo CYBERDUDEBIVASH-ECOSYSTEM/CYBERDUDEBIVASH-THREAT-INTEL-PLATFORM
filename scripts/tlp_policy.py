@@ -227,7 +227,7 @@ def _nvd_metadata_projection(item: Dict[str, Any]) -> bool:
     if score is None:
         return (item["metric_validation"] == "METRIC_REVIEW_REQUIRED"
                 and all(item[k] is None for k in ("cvss_version", "cvss_vector", "cvss_severity")))
-    if type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 10:
+    if type(score) not in (int, float) or not 0 <= score <= 10 or not math.isfinite(score):
         return False
     band = "NONE" if score == 0 else "LOW" if score < 4 else "MEDIUM" if score < 7 else "HIGH" if score < 9 else "CRITICAL"
     vector = item["cvss_vector"]
