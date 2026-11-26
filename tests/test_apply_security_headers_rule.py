@@ -66,3 +66,34 @@ def test_verify_expects_exactly_the_rule_headers():
 
 def test_usage_error_without_mode():
     assert mod.main(["x"]) == 2
+
+
+@pytest.mark.parametrize("status", [301, 302, 401, 403, 404, 429, 500, 503])
+def test_static_error_or_redirect_cannot_certify_headers(monkeypatch, status):
+    expected = mod.expected_headers(OURS)
+    def headers(url):
+        if url == mod.HOST + "/upgrade.html":
+            return status, expected
+        return 200, expected if url.removeprefix(mod.HOST) in mod.STATIC_PAGES else {"x-frame-options": "DENY"}
+    monkeypatch.setattr(mod, "_headers", headers)
+    assert mod.verify(OURS, attempts=1) is False
+
+
+def test_successful_static_pages_and_worker_headers_still_pass(monkeypatch):
+    expected = mod.expected_headers(OURS)
+    monkeypatch.setattr(mod, "_headers", lambda url: (
+        200, expected if url.removeprefix(mod.HOST) in mod.STATIC_PAGES else {"x-frame-options": "DENY"}
+    ))
+    assert mod.verify(OURS, attempts=1) is True
+
+
+def test_forbidden_entrypoint_is_actionable_and_never_mutates(monkeypatch):
+    calls = []
+    def api(method, path, token, body=None):
+        calls.append(method)
+        return 403, {"errors": ["UNTRUSTED_RESPONSE_MUST_NOT_BE_PRINTED"]}
+    monkeypatch.setattr(mod, "_api", api)
+    with pytest.raises(RuntimeError, match="Zone Transform Rules Read/Write") as error:
+        mod._entrypoint("TEST_TOKEN", "a" * 32)
+    assert calls == ["GET"]
+    assert "UNTRUSTED_RESPONSE_MUST_NOT_BE_PRINTED" not in str(error.value)
