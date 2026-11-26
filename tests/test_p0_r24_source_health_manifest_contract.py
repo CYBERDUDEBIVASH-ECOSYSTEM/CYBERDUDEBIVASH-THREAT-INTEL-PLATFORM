@@ -115,3 +115,43 @@ def test_unverified_processing_clock_alone_is_not_a_real_source_event(monkeypatc
     audit = _audit(monkeypatch, raw)
     assert audit["health_breakdown"]["NO_DATA"] == 1
     assert audit["health_breakdown"]["HEALTHY"] == 0
+
+
+def test_specific_rss_cursor_cannot_make_catchall_healthy(monkeypatch):
+    specific = dict(_source(), source_id="specific", pipeline_feed_source_key="rss:cisa.gov")
+    aggregate = dict(_source(), source_id="aggregate")
+    now = datetime.now(timezone.utc)
+    state = {"sources": {
+        "rss_www_cisa_gov_advisories": {"last_seen": (now - timedelta(hours=1)).isoformat(),
+                                         "last_reason_code": "OK"},
+        "rss_vendor_old": {"last_seen": (now - timedelta(days=10)).isoformat(),
+                            "last_reason_code": "HTTP_403"},
+    }}
+    monkeypatch.setattr(sfh, "load_registry", lambda: {"registry_version": "test-only"})
+    monkeypatch.setattr(sfh, "all_sources", lambda: [aggregate, specific])
+    monkeypatch.setattr(sfh, "_load_json_safe", lambda path: (
+        state if path == sfh.FEED_STATE_PATH else [] if path == sfh.MANIFEST_PATH else None
+    ))
+    rows = {row["source_id"]: row for row in sfh.compute_health()["sources"]}
+    assert rows["specific"]["health_status"] == "HEALTHY"
+    assert rows["aggregate"]["health_status"] == "STALE"
+    assert rows["aggregate"]["reason_code"] == "HTTP_403"
+    del state["sources"]["rss_vendor_old"]
+    rows = {row["source_id"]: row for row in sfh.compute_health()["sources"]}
+    assert rows["aggregate"]["health_status"] == "NO_DATA"
+    assert rows["aggregate"]["last_event"] is None
+
+
+def test_rss_reason_uses_fetch_outcome_clock_not_publication_cursor():
+    state = {
+        "rss_vendor_a": {"last_seen": "2026-10-01T00:00:00Z",
+                          "last_reason_at": "2026-10-03T00:00:00Z",
+                          "last_reason_code": "HTTP_403"},
+        "rss_vendor_b": {"last_seen": "2026-10-02T00:00:00Z",
+                          "last_reason_at": "2026-10-02T00:00:00Z",
+                          "last_reason_code": "OK"},
+    }
+    assert sfh._feed_state_reason_code("rss:*", state) == "HTTP_403"
+    # Legacy entries without the outcome timestamp keep their cursor fallback.
+    del state["rss_vendor_a"]["last_reason_at"]
+    assert sfh._feed_state_reason_code("rss:*", state) == "OK"
