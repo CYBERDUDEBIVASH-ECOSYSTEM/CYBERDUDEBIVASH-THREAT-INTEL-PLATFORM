@@ -149,7 +149,7 @@ def _feed_state_reason_code(pipeline_key: str, feed_state_sources: Dict[str, Any
     newest_reason: Optional[str] = None
     for key, entry in feed_state_sources.items():
         if _match_manifest_key(pipeline_key, key):
-            ts = _parse_ts(entry.get("last_seen")) or _parse_ts(entry.get("last_reason_at"))
+            ts = _parse_ts(entry.get("last_reason_at")) or _parse_ts(entry.get("last_seen"))
             if ts and (newest_ts is None or ts > newest_ts):
                 newest_ts = ts
                 newest_reason = entry.get("last_reason_code")
@@ -289,6 +289,18 @@ def compute_health() -> Dict[str, Any]:
     )
     non_rss = [s for s in sources if not s["pipeline_feed_source_key"].startswith("rss:")]
 
+    # Partition RSS state with the same specificity rule used for manifest
+    # rows. A specific feed must not also make the catch-all appear fresh.
+    rss_state_by_source: Dict[str, Dict[str, Any]] = {}
+    exact_keys = {s["pipeline_feed_source_key"] for s in non_rss}
+    for key, state_entry in feed_state_sources.items():
+        if key in exact_keys:
+            continue
+        for s in rss_ordered:
+            if _match_manifest_key(s["pipeline_feed_source_key"], key):
+                rss_state_by_source.setdefault(s["source_id"], {})[key] = state_entry
+                break
+
     per_source: Dict[str, Dict[str, Any]] = {}
     unmatched_manifest_feed_sources: Dict[str, int] = {}
 
@@ -331,8 +343,13 @@ def compute_health() -> Dict[str, Any]:
         sid = s["source_id"]
         status = s["implementation_status"]
         manifest_bucket = per_source.get(sid, {"manifest_count": 0, "latest_ts": None})
-        fs_last_seen = _feed_state_last_seen(s["pipeline_feed_source_key"], feed_state_sources)
-        fs_reason_code = _feed_state_reason_code(s["pipeline_feed_source_key"], feed_state_sources)
+        pipeline_key = s["pipeline_feed_source_key"]
+        source_state = (
+            rss_state_by_source.get(sid, {})
+            if pipeline_key.startswith("rss:") else feed_state_sources
+        )
+        fs_last_seen = _feed_state_last_seen(pipeline_key, source_state)
+        fs_reason_code = _feed_state_reason_code(pipeline_key, source_state)
 
         # ATT&CK is REFERENCE_SYNC, not manifest-tracked -- health comes from
         # its own state file.
