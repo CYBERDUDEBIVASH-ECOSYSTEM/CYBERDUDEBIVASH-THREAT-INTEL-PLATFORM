@@ -791,6 +791,122 @@ footer.dossier-ftr,footer.dossier-ftr a{font-family:"Segoe UI",Helvetica,Arial,s
 """
 
 
+# Dossier template v2: an additive layer over CSS. Class names, ids and section markup are unchanged because the
+# integrity checks (dossier_integrity, build_reports_index) and the P0 tests key on them.
+_REPORT_SHARE_IMAGE = "https://intel.cyberdudebivash.com/assets/sentinel-apex-og-banner.jpg"
+
+CSS_V2 = """
+:root{color-scheme:light dark;--focus:#1e3a8a}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{overflow-wrap:break-word}
+main{min-width:0}
+main:focus{outline:none}
+.skip-link{position:absolute;left:-9999px;top:8px;z-index:1000;padding:10px 14px;background:#143d3a;color:#fff;border-radius:2px;font:600 13px/1.2 "Segoe UI",Helvetica,Arial,sans-serif;text-decoration:none}
+.skip-link:focus{left:8px}
+a:focus-visible,button:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.section{scroll-margin-top:16px}
+.section:target{box-shadow:0 0 0 2px rgba(20,61,58,.35)}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+
+/* Type floor: essential text is at least 12px, decorative micro-labels at least 11.5px. */
+.kv-key,.score-label,.score-val,.reg-name,.reg-deadline,.reg-penalty,.playbook-label,th,.cls-chip,.sev-chip{font-size:12px}
+.exec-tile-label,.exec-tile-sub,.section-num{font-size:11.5px}
+.toc-aside a[href^='#']{font-size:12.5px!important}
+.classification{flex-wrap:wrap;row-gap:8px;font-size:11.5px;letter-spacing:.1em}
+.apex-intel-grid{grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))}
+.urgency-badge{max-width:100%}
+.step p,.reg-trigger,.plv2-feat{color:#292524}
+.cls-PUBLIC{color:#2f6b2a}
+.conf-val[style*='#6b7280']{color:#4b5563!important}
+.dossier-ftr a[href*='plan=pro']{color:#92400e!important;border-color:rgba(146,64,14,.45)!important}
+
+/* Bottom line: the answer first, built only from fields the report already computes. */
+.glance{margin:18px 0 22px;padding:18px 20px;background:#fff;border:1px solid var(--border);border-left:4px solid var(--glance-accent,#143d3a);border-radius:2px;display:grid;gap:12px}
+.glance.sev-crit{--glance-accent:var(--crit)}
+.glance.sev-high{--glance-accent:var(--high)}
+.glance.sev-med{--glance-accent:var(--med)}
+.glance.sev-low{--glance-accent:var(--low)}
+.glance-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.glance-kicker{font:700 11.5px/1 "Segoe UI",Helvetica,Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.glance-pill{display:inline-block;padding:5px 10px;border:1px solid var(--border);border-radius:2px;background:var(--panel2);color:var(--text);font:800 12px/1.2 "Segoe UI",Helvetica,Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase}
+.glance-read{margin-left:auto;font:600 12px/1 "Segoe UI",Helvetica,Arial,sans-serif;color:var(--muted)}
+.glance-action{margin:0;max-width:75ch;font-size:16px;line-height:1.55;color:var(--text)}
+.glance-facts{display:flex;flex-wrap:wrap;gap:8px 22px;margin:0;padding:0;list-style:none}
+.glance-facts li{font-size:13px;color:var(--muted)}
+.glance-facts strong{color:var(--text);font-weight:700}
+.glance-note{margin:0;max-width:80ch;padding-top:10px;border-top:1px dashed var(--border);font-size:12.5px;line-height:1.5;color:var(--muted)}
+
+@media(max-width:900px){
+  .exec-card{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+.exec-tile{min-width:0}
+@media(max-width:680px){
+  .exec-card{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .glance{padding:14px}
+  .glance-action{font-size:15px}
+  .glance-read{margin-left:0}
+  .urgency-badge{white-space:normal;max-width:100%}
+  .top-nav{flex-wrap:wrap;row-gap:8px}
+  .nav-actions{flex-wrap:wrap;gap:8px;max-width:100%}
+  .nav-actions .nav-links{margin-left:0!important;padding-left:0!important;border-left:0!important}
+  .apex-intel-item{max-width:100%;box-sizing:border-box}
+  .bis-ring{flex-wrap:wrap}
+  .bis-ring .kv{grid-template-columns:minmax(0,120px) minmax(0,1fr)!important}
+  .confidence-strip{flex-wrap:wrap}
+  .confidence-strip .conf-bar{flex:1 1 100%;order:3}
+  .confidence-strip span{white-space:normal!important;margin-left:0!important}
+  .exec-layer{padding:16px!important}
+  .exec-layer table,.exec-layer tbody,.exec-layer tr,.exec-layer td{display:block!important;width:auto!important}
+  .exec-layer tr{padding:8px 0;border-bottom:1px solid rgba(255,255,255,.1)}
+  .exec-layer td:first-child{padding:0 0 3px!important;font-size:11.5px!important;letter-spacing:.08em}
+  .exec-layer td{padding-left:0!important;overflow-wrap:anywhere}
+  .section table{display:block;max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .section pre,.rule-block pre{max-width:100%;overflow-x:auto}
+  .kv-val,.dossier-id,td{overflow-wrap:anywhere}
+}
+
+@media(prefers-color-scheme:dark){
+  :root{--bg:#0d1311;--panel:#141c1a;--panel2:#19231f;--border:#26332f;--accent:#7fd1c4;--accent2:#9db8ff;--text:#e9eeeb;--muted:#a9b6b0;--crit:#ff8fa3;--high:#ffb383;--med:#f2c777;--low:#a8d77c;--info:#9fb7ff;--focus:#9fb7ff}
+  body{background:var(--bg);color:var(--text)}
+  p,li,td{color:#d9e1dd}
+  h1.dossier-title,h2.section-title,.lock-title,.plv2-title,.tier-ENT{color:#f2f6f4}
+  .top-nav{background:#101715}
+  .nav-brand,.nav-btn-stix{color:var(--accent)}
+  .nav-btn-upgrade,.cta-secondary{background:var(--panel);color:#e9eeeb;border-color:var(--border)}
+  .section,.exec-tile,.glance{background:var(--panel);border-color:var(--border)}
+  .glance{border-left-color:var(--glance-accent,var(--accent))}
+  th{background:var(--panel2);color:var(--accent)}
+  tr:hover td{background:#18231f}
+  .confidence-strip,.callout,.premium-lock,.premium-lock-v2,.tag{background:var(--panel2);border-color:var(--border);color:#d9e1dd}
+  .score-bar,.conf-bar{background:#26332f}
+  .score-fill,.conf-fill{background:var(--accent)}
+  .tlp-CLEAR,.tlp-GREEN{background:#1c4f49;color:#eaf3f0}
+  .toc-aside a[href^='#']{color:var(--muted)!important;border-bottom-color:var(--border)!important}
+  .section:target{box-shadow:0 0 0 2px rgba(127,209,196,.45)}
+  .step p,.reg-trigger,.plv2-feat{color:#d9e1dd}
+  .cls-PUBLIC{color:#8fdc8a}
+  .conf-val[style*='#6b7280']{color:#b4bfc0!important}
+  .dossier-ftr a[href*='plan=pro']{color:#ffd700!important;border-color:rgba(255,215,0,.35)!important}
+}
+
+@media print{
+  @page{margin:14mm}
+  :root{--bg:#fff;--panel:#fff;--panel2:#f7f4ee;--border:#d6d3d1;--accent:#143d3a;--text:#1c1917;--muted:#57534e;--crit:#9f1239;--high:#9a3412;--med:#92400e;--low:#3f6212}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{background:#fff!important;color:#111!important;font-size:11pt}
+  .skip-link,.nav-actions,.nav-btn,.toc-aside{display:none!important}
+  .dossier-body{display:block!important}
+  .section,.exec-tile,.glance,.exec-layer{break-inside:avoid;box-shadow:none!important}
+  h2.section-title{break-after:avoid}
+  thead{display:table-header-group}
+  tr{break-inside:avoid}
+  .exec-layer{background:#fff!important;border:1px solid #999!important}
+  .exec-layer td,.exec-layer td *{color:#111!important}
+  .exec-layer td:first-child{color:#555!important}
+}
+"""
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1825,7 +1941,7 @@ def build_report_sections(item: dict, *, render_metrics: dict | None = None) -> 
         if _sevb["prioritized"] else "#97a7bd"
     )
     _exec_layer = (
-        f"<div style='background:#0a0a1a;border:2px solid {_exec_accent};border-radius:8px;"
+        f"<div class='exec-layer' style='background:#0a0a1a;border:2px solid {_exec_accent};border-radius:8px;"
         "padding:20px 24px;margin:0 0 20px;'>"
         f"<div style='font-family:monospace;font-size:10px;color:{_exec_accent};letter-spacing:2px;"
         "font-weight:900;margin-bottom:12px;'>EXECUTIVE INTELLIGENCE LAYER — CEO / CISO / BOARD</div>"
@@ -2550,6 +2666,52 @@ def render_report(item: dict, public_prefix: str) -> str:
         ], 1)
     )
 
+    # Dossier template v2: bottom-line panel, reading time and structured data. Every value below is already
+    # computed for the header or the sections; nothing here asserts a new fact.
+    _read_min = max(1, round(len(re.sub(r"<[^>]+>", " ", sections_html or "").split()) / 220))
+    # The pill already shows the action label; show the sentence without repeating it.
+    _glance_action = _exec_action_for_header
+    if _glance_action.startswith(_urgency_txt):
+        _rest = _glance_action[len(_urgency_txt):].lstrip(" —-:").strip()
+        if _rest:
+            _glance_action = _rest[:1].upper() + _rest[1:]
+    _glance_html = (
+        f"<aside class='glance sev-{_sev_tile}' aria-label='Bottom line'>"
+        "<div class='glance-top'><span class='glance-kicker'>Bottom line</span>"
+        f"<span class='glance-pill'>{_h(_urgency_txt)}</span>"
+        f"<span class='glance-read'>{_read_min} min read</span></div>"
+        f"<p class='glance-action'>{_h(_glance_action)}</p>"
+        "<ul class='glance-facts'>"
+        f"<li>Rating <strong>{_h(_sevb_hdr['display'])}</strong></li>"
+        f"<li>CVSS <strong>{_cvss_disp}</strong></li>"
+        f"<li>EPSS <strong>{_epss_disp}{_epss_pct}</strong></li>"
+        f"<li>CISA KEV <strong>{_kev_disp}</strong></li>"
+        f"<li>Validated IOCs <strong>{_ioc_validated_hdr}</strong></li>"
+        f"<li>ATT&amp;CK techniques <strong>{_ttp_count}</strong></li>"
+        "</ul>"
+        "<p class='glance-note'>This report summarizes a public advisory. No independent customer-specific "
+        "compromise, exposed assets, or incident impact has been verified by this report.</p>"
+        "</aside>"
+    )
+    _cve_ids = sorted(set(re.findall(r"CVE-\d{4}-\d{4,}", f"{item.get('cve_id') or ''} {title}", re.IGNORECASE)))[:10]
+    _org = {"@type": "Organization", "name": "CYBERDUDEBIVASH\u00ae SENTINEL APEX",
+            "url": "https://intel.cyberdudebivash.com",
+            "logo": {"@type": "ImageObject", "url": "https://intel.cyberdudebivash.com/logo.png"}}
+    _ld = {"@context": "https://schema.org", "@type": "TechArticle", "headline": str(title)[:200],
+           "inLanguage": "en", "isAccessibleForFree": True, "articleSection": "Threat intelligence",
+           "url": report_url, "mainEntityOfPage": report_url, "identifier": intel_id,
+           "image": _REPORT_SHARE_IMAGE, "publisher": _org, "author": _org}
+    _iso_ts = str(item.get("timestamp") or "")
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", _iso_ts):
+        _ld["datePublished"] = _iso_ts
+        _ld["dateModified"] = _iso_ts
+    if _cve_ids:
+        _ld["about"] = [{"@type": "Thing", "name": c, "identifier": c} for c in _cve_ids]
+        _ld["keywords"] = ", ".join(_cve_ids + ["threat intelligence"])
+    # HTML-safe JSON: no raw <, > or & can reach the page, so source text can never read as markup.
+    _ld_json = (json.dumps(_ld, ensure_ascii=False, separators=(",", ":"))
+                .replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e"))
+
     return f"""<!doctype html>
 <!-- CDB-REPORT-ENGINE: generate_intel_reports.py v{PLATFORM_VERSION} -->
 <html lang='en'>
@@ -2562,12 +2724,26 @@ def render_report(item: dict, public_prefix: str) -> str:
 <meta property='og:title' content='{_h(title)} · SENTINEL APEX Tactical Dossier'>
 <meta property='og:description' content='Severity {_h(sev)} · Risk {risk}/10 · CYBERDUDEBIVASH SENTINEL APEX'>
 <meta property='og:type' content='article'>
+<meta property='og:site_name' content='CYBERDUDEBIVASH SENTINEL APEX'>
+<meta property='og:url' content='{_h(report_url)}'>
+<meta property='og:image' content='{_REPORT_SHARE_IMAGE}'>
+<meta property='og:image:alt' content='CYBERDUDEBIVASH SENTINEL APEX threat intelligence'>
+<meta name='twitter:card' content='summary_large_image'>
+<meta name='twitter:title' content='{_h(title)}'>
+<meta name='twitter:description' content='Severity {_h(sev)} · Risk {risk}/10 · CYBERDUDEBIVASH SENTINEL APEX'>
+<meta name='twitter:image' content='{_REPORT_SHARE_IMAGE}'>
+<meta name='color-scheme' content='light dark'>
+<meta name='theme-color' content='#143d3a' media='(prefers-color-scheme: light)'>
+<meta name='theme-color' content='#0d1311' media='(prefers-color-scheme: dark)'>
 <title>{_h(title)} · SENTINEL APEX Tactical Dossier</title>
 <link rel='canonical' href='{_h(report_url)}'>
+<script type='application/ld+json'>{_ld_json}</script>
 <style>{CSS}
+{CSS_V2}
 {_eco.ECOSYSTEM_CSS}</style>
 </head>
 <body>
+<a class='skip-link' href='#report-main'>Skip to the report</a>
 <div class='tlp-banner tlp-{_h(tlp.replace(":","").replace("TLP","").strip() or "CLEAR")}'>
   TLP: {_h(_tlp_dec_r['label'])} &nbsp;·&nbsp; CYBERDUDEBIVASH SENTINEL APEX &nbsp;·&nbsp; INTELLIGENCE REPORT &nbsp;·&nbsp; {PLATFORM_VERSION}
 </div>
@@ -2612,6 +2788,7 @@ def render_report(item: dict, public_prefix: str) -> str:
   <div class='tag-strip'>{_render_tags(tags)}</div>
 </header>
 
+{_glance_html}
 <!-- Executive Intelligence Card -->
 <div class='exec-card'>
   <div class='exec-tile {_sev_tile}'>
@@ -2660,7 +2837,7 @@ def render_report(item: dict, public_prefix: str) -> str:
     <button class='nav-btn nav-btn-print' onclick='navigator.clipboard&&navigator.clipboard.writeText("{_h(report_url)}").then(()=>this.textContent="Copied!")' style='width:100%;justify-content:center;font-size:10px'>&#128203; Copy Link</button>
   </div>
 </aside>
-<main>
+<main id='report-main' tabindex='-1'>
 {sections_html}
 {_eco.render_ecosystem_showcase(item)}
 </main>
