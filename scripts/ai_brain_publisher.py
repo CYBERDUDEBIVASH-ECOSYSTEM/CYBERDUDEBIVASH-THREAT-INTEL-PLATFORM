@@ -546,30 +546,19 @@ def build_apex_summary(
     - MSSP threat briefings (client-facing intelligence)
     - Executive risk dashboards (board-level decision support)
     """
-    import re as _re
-
-    # Reuse the upstream executive summary only while its source run is still
-    # publishable as current intelligence.
-    #
-    # v201.0 CORRECTNESS FIX: this branch used to rewrite the advisory-count
-    # numerals inside a stored summary to today's feed count before returning
-    # it. Applied to a stale artifact (apex_forecast_latest.json was found 158
-    # days old during the 2026-09-09 audit) that rewrite made months-old
-    # prose report today's numbers -- the text asserted a present-tense
-    # assessment that no engine had actually made. The count refresh is kept
-    # for a still-current summary, where it is a harmless consistency touch-up,
-    # and the whole branch is skipped once the source is no longer publishable
-    # so the derived live-feed summary below is used instead.
-    if apex_publishable and apex_data and apex_data.get("ai_executive_summary"):
-        base = apex_data["ai_executive_summary"]
-        count = len(feed)
-        base = _re.sub(r"analyzing \d+ recent", f"analyzing {count} recent", base)
-        # Update advisory count numerals in the text
-        base = _re.sub(r"\b\d+ intelligence advisories?\b", f"{count} intelligence advisories", base)
-        return base
-    if apex_data and apex_data.get("ai_executive_summary"):
-        log.warning("[FRESHNESS] apex_forecast_latest.json summary excluded -- "
-                    "deriving summary from the live feed instead")
+    # The legacy predictive cortex emits heuristic prose and a fixed
+    # confidence value without model-validation evidence. Age alone cannot
+    # certify that prose, even if the artifact was freshly generated.
+    # Keep the existing signature and freshness telemetry for compatibility;
+    # derive the executive summary from the current feed and validated
+    # analytic outputs instead of importing or rewriting legacy claims.
+    if isinstance(apex_data, dict) and apex_data.get("ai_executive_summary"):
+        if apex_publishable:
+            log.warning("[EVIDENCE] Legacy APEX forecast summary excluded -- "
+                        "freshness does not establish predictive validity")
+        else:
+            log.warning("[FRESHNESS] apex_forecast_latest.json summary excluded -- "
+                        "deriving summary from the live feed instead")
 
     # --- Enterprise-grade derived summary from live feed stats ---
     count = len(feed)
