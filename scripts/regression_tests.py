@@ -2299,6 +2299,26 @@ def t39():
     assert not fm.select_and_forecast(seasonal[:20], horizon=14)["publishable"], \
         "forecast published on 20 days of history"
 
+    # Interpolation must not satisfy the genuine-observation floor even
+    # when the series meets the separate 80% coverage threshold.
+    partial = fm.select_and_forecast(
+        seasonal[:40], horizon=7, observed_days=32, span_days=40
+    )
+    assert not partial["publishable"] and "forecast" not in partial
+    assert "32 observed days available" in partial["reason"]
+    complete = fm.select_and_forecast(seasonal[:40], horizon=7,
+                                      observed_days=40, span_days=40)
+    assert complete["publishable"], complete["reason"]
+    for observed, span in ((41, 40), (-1, 40), (40, 39), (40, 0),
+                           (True, 40), (40, 40.0)):
+        invalid = fm.select_and_forecast(seasonal[:40], horizon=7,
+                                         observed_days=observed, span_days=span)
+        assert not invalid["publishable"] and "forecast" not in invalid
+        assert "invalid observation metadata" in invalid["reason"]
+    # Missing span must not bypass the coverage gate.
+    sparse = fm.select_and_forecast(seasonal[:120], horizon=14, observed_days=40)
+    assert not sparse["publishable"] and "coverage" in sparse["reason"]
+
     # --- Backtesting must never score a model on data it was fitted on. ---
     seen = []
 

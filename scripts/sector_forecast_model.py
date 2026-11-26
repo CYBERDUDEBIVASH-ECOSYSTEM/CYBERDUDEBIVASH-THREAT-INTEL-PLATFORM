@@ -402,17 +402,25 @@ def select_and_forecast(
         out.update(extra)
         return out
 
-    if n < min_history:
+    # Calendar points may include interpolated gaps. They do not count
+    # toward the minimum number of genuinely observed days.
+    actual_observed = n if observed_days is None else observed_days
+    actual_span = n if span_days is None else span_days
+    if (type(actual_observed) is not int or type(actual_span) is not int
+            or not 0 <= actual_observed <= n or actual_span != n):
+        return decline("invalid observation metadata: observed days must be "
+                       "within the contiguous calendar series")
+    if actual_observed < min_history:
         return decline(
-            f"{n} observed days available; {min_history} required before a "
+            f"{actual_observed} observed days available; {min_history} required before a "
             f"{horizon}-day forecast can be validated"
         )
 
-    if observed_days is not None and span_days:
-        coverage = observed_days / float(span_days)
+    if actual_span:
+        coverage = actual_observed / float(actual_span)
         if coverage < min_coverage:
             return decline(
-                f"observation coverage {coverage:.0%} over {span_days} days is below "
+                f"observation coverage {coverage:.0%} over {actual_span} days is below "
                 f"the {min_coverage:.0%} minimum; the series has gaps too large to "
                 "treat as a daily series",
                 coverage=round(coverage, 3),
