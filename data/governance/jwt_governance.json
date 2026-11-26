@@ -1,11 +1,11 @@
 {
   "schema_version": "1.0",
-  "generated_at": "2026-08-26T11:16:02Z",
+  "generated_at": "2026-11-26T08:50:12Z",
   "generator": "jwt_governance.py",
   "version": "146.0.0",
-  "overall_verdict": "FAIL",
-  "pass_count": 4,
-  "fail_count": 1,
+  "overall_verdict": "PASS",
+  "pass_count": 5,
+  "fail_count": 0,
   "warn_count": 0,
   "checks": [
     {
@@ -14,9 +14,9 @@
       "detail": "CDB_JWT_SECRET length >= 32 bytes (entropy OK)"
     },
     {
-      "check": "webhook_hmac_subscription_mgr",
-      "status": "FAIL",
-      "detail": "subscription_manager.py: No HMAC/signature verification found. Webhook payloads accepted without authenticity check (SSRF/forgery risk)."
+      "check": "legacy_webhook_dispatch_denied",
+      "status": "PASS",
+      "detail": "Legacy CLI rejects webhook dispatch; no credential or state created"
     },
     {
       "check": "jwt_expiry_policy",
@@ -39,7 +39,7 @@
       "detail": "Worker auth enforcement: 5/6 auth indicators present"
     }
   ],
-  "runtime_seconds": 0.006,
+  "runtime_seconds": 0.048,
   "policy": {
     "min_secret_bytes": 32,
     "max_access_token_h": 24,
