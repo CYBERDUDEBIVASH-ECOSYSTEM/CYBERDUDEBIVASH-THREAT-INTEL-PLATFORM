@@ -1833,6 +1833,38 @@ def t33():
         "zero-day candidates would silently publish as non-candidates"
     )
 
+    # A fresh timestamp cannot make the retired, unvalidated prediction
+    # engine's fixed-confidence prose admissible. Exercise the real builder,
+    # not just its source text, even when no generated bundle exists.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ai_brain_publisher", pub)
+    publisher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(publisher)
+    legacy = {
+        "forecast_timestamp": "2026-11-26T10:00:00Z",
+        "confidence_level": 88.5,
+        "ai_executive_summary": "UNVALIDATED_FORECAST predicts imminent spike at 88.5%",
+    }
+    feed = [{"severity": "HIGH"}]
+    expected = publisher.build_apex_summary(None, feed, active_engines=[])
+    for publishable in (True, False):
+        result = publisher.build_apex_summary(
+            legacy, feed, apex_publishable=publishable, active_engines=[]
+        )
+        assert result == expected, "Legacy prediction prose bypassed evidence controls"
+        assert "UNVALIDATED_FORECAST" not in result
+        assert "88.5%" not in result
+        empty = publisher.build_apex_summary(
+            legacy, [], apex_publishable=publishable, active_engines=[]
+        )
+        assert empty == publisher.build_apex_summary(None, [], active_engines=[])
+    assert publisher.build_apex_summary(
+        ["invalid legacy envelope"], feed, active_engines=[]
+    ) == expected, "Malformed optional forecast must not crash the summary"
+    assert "Sector Risk Forecasting" in publisher.build_apex_summary(
+        legacy, feed, active_engines=["Sector Risk Forecasting"]
+    ), "Validated analytic engine attribution must remain available"
+
     # The published bundle, when present, must carry the integrity fields that
     # let a consumer tell current intelligence from stale intelligence.
     summary_path = REPO_ROOT / "api" / "v1" / "intel" / "ai_summary.json"
