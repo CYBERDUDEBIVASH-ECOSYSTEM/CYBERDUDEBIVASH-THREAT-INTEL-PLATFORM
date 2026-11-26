@@ -311,8 +311,8 @@ def build_sector_forecasts(styles, forecasts: list) -> list:
     header_row = [
         Paragraph("Sector", styles["TableHead"]),
         Paragraph("Current Risk", styles["TableHead"]),
-        Paragraph("Peak (7d)", styles["TableHead"]),
-        Paragraph("Prob %", styles["TableHead"]),
+        Paragraph("Peak (30d)", styles["TableHead"]),
+        Paragraph("Attack prob.", styles["TableHead"]),
         Paragraph("Trend", styles["TableHead"]),
         Paragraph("Attack Vector", styles["TableHead"]),
     ]
@@ -320,7 +320,6 @@ def build_sector_forecasts(styles, forecasts: list) -> list:
     for f in top_f:
         cur  = float(f.get("current_risk", 0) or 0)
         peak = float(f.get("peak_risk", 0) or 0)
-        prob = f.get("prob", 0)
         trend= str(f.get("trend", "STABLE"))
         sect = str(f.get("sector", "Unknown"))[:30]
         vec  = str(f.get("vector", "Unknown"))[:45]
@@ -331,7 +330,9 @@ def build_sector_forecasts(styles, forecasts: list) -> list:
             Paragraph(sect, styles["TableCell"]),
             Paragraph(f'<font color="#{rc.hexval()[2:]}"><b>{cur:.2f}</b></font>', styles["TableCell"]),
             Paragraph(f'<font color="#{pc.hexval()[2:]}">{peak:.2f}</font>', styles["TableCell"]),
-            Paragraph(f"{prob}%", styles["TableCell"]),
+            # Legacy bundles may still contain an uncalibrated numeric prob.
+            # Never render it as an event probability.
+            Paragraph("N/A", styles["TableCell"]),
             Paragraph(f'<font color="#{tc.hexval()[2:]}">{trend}</font>', styles["TableCell"]),
             Paragraph(vec, styles["TableCell"]),
         ])

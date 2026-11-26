@@ -2168,6 +2168,21 @@ def t37():
     assert len(legacy_out) == 1 and legacy_out[0]["sector"] == "Energy", \
         "build_forecasts dropped a legitimate legacy forecast — backward compatibility broken"
 
+    # An intensity forecast is not a calibrated event probability. Preserve
+    # the real series but never produce the old arbitrary 10..99% score.
+    assert legacy_out[0]["prob"] is None
+    assert legacy_out[0]["probability_status"] == "NOT_ESTIMATED"
+    assert legacy_out[0]["forecast_7d"] == [6.5] * 7
+    legacy["sectors"]["energy"]["confidence"] = 0.0
+    zero_skill = mod.build_forecasts(legacy)
+    assert zero_skill[0]["prob"] is None, "zero skill invented a probability"
+    assert mod.build_forecasts(legacy, publishable=False) == []
+    # The known PDF consumer must not revive old numeric probability fields.
+    brief = (REPO_ROOT / "scripts" / "daily_brief_generator.py").read_text(encoding="utf-8")
+    section = brief.split("def build_sector_forecasts(", 1)[1].split("\ndef ", 1)[0]
+    assert 'Paragraph("N/A", styles["TableCell"])' in section
+    assert 'f.get("prob"' not in section
+
     # An unscored anomaly must publish unscored, not as an invented 7.5/HIGH.
     radar = {
         "top10_anomalous": [
