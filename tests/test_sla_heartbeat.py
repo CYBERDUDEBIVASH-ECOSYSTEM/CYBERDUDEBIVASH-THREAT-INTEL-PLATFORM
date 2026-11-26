@@ -10,6 +10,9 @@ No network: probe and POST are injected.
 """
 import json
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -229,6 +232,41 @@ def test_workflow_actions_are_sha_pinned_and_secret_is_scoped(wf):
     assert probe["env"] == {"WORKER_ADMIN_SECRET": "${{ secrets.WORKER_ADMIN_SECRET }}"}
     save = next(s for s in steps if "cache/save" in s.get("uses", ""))
     assert save["if"] == "always()", "undelivered heartbeats must survive a red (DOWN) run"
+
+
+
+def test_workflow_sparse_checkout_includes_http_helper_and_imports_offline(wf, tmp_path):
+    """Exercise the actual declared file set, not the full repository import path."""
+    steps = wf["jobs"]["heartbeat"]["steps"]
+    checkout = next(s for s in steps if s.get("uses", "").startswith("actions/checkout@"))
+    settings = checkout["with"]
+    assert settings["sparse-checkout-cone-mode"] is False
+    paths = set(settings["sparse-checkout"].split())
+    required = {"scripts/sla_heartbeat.py", "scripts/cdb_safe_http.py"}
+    assert required <= paths, "sparse checkout must include the hardened HTTP dependency"
+    # This deliberately models the current literal-file checkout contract.
+    # A future switch to directory patterns needs an updated packaging test.
+    for relative in sorted(paths):
+        source = REPO / relative
+        assert source.is_file(), relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    # Isolated interpreter: no inherited PYTHONPATH, no main(), no live probe.
+    command = [
+        sys.executable, "-I", "-c",
+        "import runpy, sys; sys.path.insert(0, 'scripts'); "
+        "runpy.run_path('scripts/sla_heartbeat.py', run_name='heartbeat_import_test')",
+    ]
+    result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+    # Negative control: reproduce the original production packaging defect.
+    (tmp_path / "scripts" / "cdb_safe_http.py").unlink()
+    result = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    assert result.returncode != 0, "missing helper must fail the isolated import"
+    assert "ModuleNotFoundError" in result.stderr
+
 
 
 def test_batch_size_matches_the_worker_cap():
