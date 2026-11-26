@@ -155,6 +155,12 @@ def _entrypoint(token: str, zone: str) -> list[dict]:
     status, body = _api("GET", f"/zones/{zone}/rulesets/phases/{PHASE}/entrypoint", token)
     if status == 404:
         return []  # no response-header rules on the zone yet
+    if status in (401, 403):
+        raise RuntimeError(
+            f"reading {PHASE} entrypoint failed ({status}): "
+            "verify the CF_API_TOKEN zone scope and Zone Transform Rules Read/Write permission; "
+            "no rule changes attempted"
+        )
     if status != 200:
         raise RuntimeError(f"reading {PHASE} entrypoint failed ({status})")
     return body["result"].get("rules", [])
@@ -182,6 +188,9 @@ def verify(rule: dict, attempts: int = 6, wait: float = 10.0) -> bool:
         problems = []
         for path in STATIC_PAGES:
             status, got = _headers(HOST + path)
+            if status != 200:
+                problems.append(f"{path}: HTTP {status}; successful static page response required")
+                continue
             for name, value in want.items():
                 if got.get(name) != value:
                     problems.append(f"{path}: {name} = {got.get(name)!r}, want {value!r}")
