@@ -312,6 +312,10 @@ class SyntheticMarkerDetector:
                 adv.get("source", ""),
                 adv.get("id", ""),
                 adv.get("tags", ""),
+                # Recovery and attribution producers store markers in these
+                # structured fields, not necessarily in the narrative text.
+                adv.get("feed_source", ""),
+                adv.get("actor_tag", ""),
             ]
             combined = " ".join(str(f) for f in text_fields if f)
 
