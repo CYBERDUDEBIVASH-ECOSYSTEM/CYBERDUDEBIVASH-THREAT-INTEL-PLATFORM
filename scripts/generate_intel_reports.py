@@ -758,6 +758,7 @@ tr:hover td{background:#faf8f5}
 .exec-tile{text-align:left;background:#fff}
 .exec-tile:hover{border-color:var(--border)}
 .exec-tile-val{font-family:Georgia,"Iowan Old Style",Palatino,serif;font-weight:600;font-size:26px}
+.exec-tile-val.sev-word{font-size:clamp(18px,5.2vw,26px);line-height:1.15;white-space:nowrap}
 .exec-tile-label,.exec-tile-sub{font-family:"Segoe UI",Helvetica,Arial,sans-serif;letter-spacing:.06em}
 .sev-pulse{animation:none;width:6px;height:6px}
 .report-watermark{display:none}
@@ -2792,7 +2793,7 @@ def render_report(item: dict, public_prefix: str) -> str:
 <div class='exec-card'>
   <div class='exec-tile {_sev_tile}'>
     <div class='exec-tile-label'>Severity</div>
-    <div class='exec-tile-val'>{_h(_sevb_hdr['display'][:5])}</div>
+    <div class='exec-tile-val sev-word'>{_h(_sevb_hdr['display'][:16])}</div>
     <div class='exec-tile-sub'>{'Classification' if _sevb_hdr['authoritative'] else ('KEV listed &middot; no CVSS' if _sevb_hdr['kev'] else 'No CVSS / KEV data')}</div>
   </div>
   <div class='exec-tile {_risk_tile}'>

@@ -112,6 +112,21 @@ class TestMandatoryJobsAlwaysRunAndAreRequired(unittest.TestCase):
         self.assertEqual(missing, set(), f"sast-gate's needs: list is missing mandatory job(s): {missing}")
 
 
+class TestScheduledSecretScanBudget(unittest.TestCase):
+    def test_only_scheduled_audits_receive_the_extended_budget(self):
+        job = _jobs()["trufflehog"]
+        self.assertEqual(
+            job["timeout-minutes"],
+            "${{ github.event_name == 'schedule' && 40 || 20 }}",
+        )
+        self.assertNotIn("continue-on-error", job)
+        scan = next(s for s in job["steps"] if s.get("name") == "TruffleHog OSS")
+        self.assertNotIn("continue-on-error", scan)
+        self.assertEqual(scan["with"]["base"], "${{ steps.scan-range.outputs.base }}")
+        self.assertEqual(scan["with"]["head"], "${{ steps.scan-range.outputs.head }}")
+        self.assertEqual(scan["with"]["extra_args"], "--only-verified")
+
+
 class TestConditionalScannersAreGovernedByChangeClassification(unittest.TestCase):
     def test_every_conditional_scanner_needs_changes_job(self):
         jobs = _jobs()
