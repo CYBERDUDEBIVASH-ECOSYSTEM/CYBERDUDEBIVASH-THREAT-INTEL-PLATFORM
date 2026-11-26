@@ -50,6 +50,7 @@ sys.path.insert(0, str(REPO))
 from scripts.source_diversity_enforcer import (
     DiversityEnforcerReport,
     ShannonEntropyGate,
+    SyntheticMarkerDetector,
     MIN_ENTROPY,
     WARN_ENTROPY,
     MAX_DOMINANCE_PCT,
@@ -396,3 +397,35 @@ def test_integration_no_hard_fail_after_trim():
         assert summary.get("hard_fail") is False, (
             f"hard_fail={summary.get('hard_fail')} — would still emit ::warning:: annotation."
         )
+
+
+@pytest.mark.parametrize("field, marker", [
+    ("feed_source", "CDB-REBUILT"),
+    ("actor_tag", "CDB-SYNTHETIC"),
+    ("actor_tag", "CDB-FABRICATED"),
+])
+def test_structured_provenance_marker_is_detected(field, marker):
+    rows = [_make_advisory("https://example.com") for _ in range(10)]
+    rows[0][field] = marker
+    result = SyntheticMarkerDetector().detect(rows)
+    assert result["synthetic_count"] == 1
+    assert result["synthetic_pct"] == 10.0
+    assert result["status"] == "WARN"
+    assert result["flagged"][0]["marker"] == marker
+
+
+def test_structured_and_legacy_markers_count_record_once():
+    row = _make_advisory("https://example.com")
+    row.update(title="[REBUILT] Advisory", feed_source="CDB-REBUILT",
+               actor_tag="CDB-SYNTHETIC")
+    result = SyntheticMarkerDetector().detect([row])
+    assert result["synthetic_count"] == 1
+    assert result["status"] == "FAIL"
+
+
+def test_normal_source_and_unattributed_actor_remain_clean():
+    row = _make_advisory("https://example.com")
+    row.update(feed_source="github_advisories", actor_tag="CDB-UNATTR-CVE")
+    result = SyntheticMarkerDetector().detect([row])
+    assert result["synthetic_count"] == 0
+    assert result["status"] == "OK"
