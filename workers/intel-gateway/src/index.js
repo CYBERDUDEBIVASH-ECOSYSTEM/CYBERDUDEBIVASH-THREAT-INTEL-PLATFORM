@@ -6767,7 +6767,7 @@ async function handleRequest(request, env, ctx) {
   // stale credential can't change behavior on routes that are public
   // regardless of auth state.
   if (auth.error
-      && (path.startsWith("/api/") || path.startsWith("/taxii"))
+      && (path.startsWith("/api/") || path.startsWith("/taxii") || path === "/latest.json")
       && !path.startsWith("/api/admin") && !path.startsWith("/api/auth")
       && !path.startsWith("/api/preview") && !path.startsWith("/api/payment")
       && path !== "/api/pricing"
@@ -9657,6 +9657,26 @@ async function runWatchdogSchedule(env) {
   }
 }
 
+// Credential presence is sufficient to bypass the shared URL-keyed cache.
+function requiresPrivateDelivery(request, pathname, method) {
+  if (method !== "GET" && method !== "HEAD") return false;
+  return ["X-API-Key", "X-Sentinel-Key", "Authorization", "X-Admin-Key", "Cookie"]
+    .some(name => request.headers.has(name))
+    || new URL(request.url).searchParams.has("api_key");
+}
+
+function enforcePrivateDelivery(response) {
+  const directives = (response.headers.get("Cache-Control") || "")
+    .split(",").map(value => value.trim().toLowerCase());
+  // Preserve existing safe no-store response contracts, including auth errors.
+  // Conflicting public/shared-cache directives must never survive.
+  if (!directives.includes("no-store") || directives.some(value =>
+    /^(public|s-maxage)(?:\s*=|$)/.test(value))) {
+    response.headers.set("Cache-Control", "private, no-store");
+  }
+  return response;
+}
+
 function isEdgeCacheableRequest(pathname, method) {
   return method === "GET"
     && classifyRoute(pathname, method).bucket === "PUBLIC"
@@ -9706,7 +9726,8 @@ export default {
     // to) the shared URL-keyed edge cache -- see the /api/health handler.
     const healthAdminCall = (pathname === "/api/health" || pathname === "/api/health/") &&
       !!(request.headers.get("X-Admin-Key") || request.headers.get("Authorization"));
-    const cacheable = isEdgeCacheableRequest(pathname, method) && !healthAdminCall;
+    const privateDelivery = requiresPrivateDelivery(request, pathname, method);
+    const cacheable = isEdgeCacheableRequest(pathname, method) && !healthAdminCall && !privateDelivery;
     const edgeCache = cacheable ? caches.default : null;
     if (edgeCache) {
       try {
@@ -9719,6 +9740,7 @@ export default {
 
     try {
       const response = withBaselineHeaders(await handleRequest(request, env, ctx), request, pathname, method, requestId);
+      if (privateDelivery) enforcePrivateDelivery(response);
       // Only a 200 is ever stored -- never pins an error/outage in place
       // for the TTL. Cache-Control is normalised to a known, bounded value
       // here rather than trusting each individual handler to have set one
@@ -9758,13 +9780,15 @@ export default {
       // err.message can carry internal detail (paths, binding names,
       // upstream API error text).
       console.error(`[fetch] request_id=${requestId} unhandled error: ${err && err.message ? err.message : err}`);
-      return withBaselineHeaders(
+      const errorResponse = withBaselineHeaders(
         new Response(JSON.stringify({ error: "Internal gateway error" }), {
           status: 500,
           headers: { ...JSON_CONTENT },
         }),
         request, pathname, method, requestId
       );
+      if (privateDelivery) enforcePrivateDelivery(errorResponse);
+      return errorResponse;
     }
   },
   async scheduled(event, env, ctx) {
