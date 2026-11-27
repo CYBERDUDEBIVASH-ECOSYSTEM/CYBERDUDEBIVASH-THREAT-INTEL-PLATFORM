@@ -144,7 +144,7 @@ def read_bytes_for_inspection(path: Path | str) -> bytes:
 
 
 def main() -> int:
-    sys.stdout.write(read_homepage_source())
+    sys.stdout.buffer.write(read_homepage_source().encode("utf-8"))
     return 0
 
 
