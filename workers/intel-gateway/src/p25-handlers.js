@@ -21,7 +21,7 @@
 
 import { computeP20QualityScore, hasConfirmedKev } from './p20-handlers.js';
 import { getP21CertificationLevel }  from './p21-handlers.js';
-import { explicitCvss, explicitRiskScore } from './metric-semantics.js';
+import { explicitCvss, explicitRiskScore, canonicalEpssPercent } from './metric-semantics.js';
 
 export const P25_VERSION = "P25.0";
 
@@ -341,8 +341,9 @@ export function computeEnterpriseTrustScore(item) {
   // percentage here, matching p20-handlers.js's convention -- previously this
   // was compared directly against 0-100 thresholds below (D5), so it could
   // never award more than the lowest non-zero tier for any real EPSS value.
-  const epssRaw   = parseFloat(sd.epss   || item.epss_score || 0);
-  const epss      = epssRaw > 1 ? epssRaw : epssRaw * 100;
+  const canonicalEpss = canonicalEpssPercent(item);
+  const epssRaw = canonicalEpss === undefined ? parseFloat(sd.epss || item.epss_score || 0) : 0;
+  const epss = canonicalEpss === undefined ? (epssRaw > 1 ? epssRaw : epssRaw * 100) : (canonicalEpss ?? 0);
   const kev       = (hasConfirmedKev(item) || hasConfirmedKev({kev: sd.kev}));
   const exploit   = !!(sd.active_exploit || item.active_exploit);
   const zeroday   = !!(sd.zero_day       || item.zero_day);

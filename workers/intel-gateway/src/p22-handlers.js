@@ -20,6 +20,7 @@
 
 import { computeP20QualityScore, stripMarkdown, getPublicationStage } from './p20-handlers.js';
 import { getP21CertificationLevel } from './p21-handlers.js';
+import { canonicalEpssPercent } from './metric-semantics.js';
 
 export const P22_VERSION = "22.0";
 
@@ -89,7 +90,8 @@ export function _detectContradictions(item) {
   // percentage here so the >=50 threshold below can ever actually fire --
   // previously this compared a 0-1 value against a 0-100 threshold, so C4
   // never triggered for any real EPSS score.
-  const epss     = (parseFloat(item.epss_score) || 0) * 100;
+  const canonicalEpss = canonicalEpssPercent(item);
+  const epss = canonicalEpss === undefined ? (parseFloat(item.epss_score) || 0) * 100 : (canonicalEpss ?? 0);
 
   // C1: CVSS vs Severity
   if (cvss > 0 && severity && !["UNKNOWN", "INFO", ""].includes(severity)) {
@@ -280,7 +282,8 @@ export function buildSOCAnalystBlock(item) {
   const esc2 = s => String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   const cvss    = parseFloat(item.cvss_score || item.cvss) || 0;
   const kev     = !!(item.kev_present || item.kev);
-  const epss    = parseFloat(item.epss_score) || 0;
+  const canonicalEpss = canonicalEpssPercent(item);
+  const epss = canonicalEpss === undefined ? (parseFloat(item.epss_score) || 0) : (canonicalEpss ?? 0);
   const sev     = (item.severity || "UNKNOWN").toUpperCase();
   const ttps    = (item.ttps || item.mitre_tactics || []).filter(Boolean);
   const cves    = [...new Set((item.cve_ids || (item.cve_id ? [item.cve_id] : [])).filter(Boolean))];
