@@ -56,3 +56,37 @@ export function metricTruth(item = {}) {
     risk_is_cvss: false,
   };
 }
+
+// Canonical producer contract: severity_epss_truth.py publishes percentage
+// points (0..100), never a fractional probability. Undefined means a legacy
+// item with no canonical evidence; null means explicit evidence is invalid or
+// unknown. Do not fall back to a stale derived value when evidence is present.
+export function canonicalEpssPercent(item = {}) {
+  const marked = ['epss_pct', 'epss_source', 'epss_cve', 'epss_date'].some(k => Object.hasOwn(item, k)) ||
+    (typeof item.epss === 'string' && item.epss.includes('%'));
+  if (!marked) return undefined;
+  const pct = finiteInRange(item.epss_pct, 0, 100);
+  const match = typeof item.epss === 'string' ? item.epss.trim().match(/^(\d{1,3}(?:\.\d+)?)\s*%$/) : null;
+  const text = match ? finiteInRange(match[1], 0, 100) : null;
+  const score = finiteInRange(item.epss_score, 0, 100);
+  const agrees = (a, b) => Math.abs(a - b) <= 0.010000000001;
+  if (item.epss_source === 'FIRST.org') {
+    if (pct === null) return null;
+    if (item.epss_score != null && (score === null || !agrees(score, pct))) return null;
+    if (item.epss != null && (text === null || !agrees(text, pct))) return null;
+    if (item.epss_cve != null) {
+      const ids = [item.cve_id, ...(Array.isArray(item.cve_ids) ? item.cve_ids : [item.cve_ids])];
+      if (typeof item.epss_cve !== 'string' || !/^CVE-\d{4}-\d{4,}$/.test(item.epss_cve) || !ids.includes(item.epss_cve)) return null;
+    }
+    if (item.epss_date != null) {
+      if (typeof item.epss_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(item.epss_date)) return null;
+      const t = Date.parse(item.epss_date+'T00:00:00Z');
+      if (!Number.isFinite(t) || new Date(t).toISOString().slice(0,10) !== item.epss_date) return null;
+    }
+    return pct;
+  }
+  if (item.epss_source != null || text === null) return null;
+  if (item.epss_score != null && (score === null || !agrees(score, text))) return null;
+  if (item.epss_pct != null && (pct === null || !agrees(pct, text))) return null;
+  return text;
+}
