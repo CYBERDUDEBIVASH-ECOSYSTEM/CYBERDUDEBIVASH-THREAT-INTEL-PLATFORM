@@ -9659,21 +9659,29 @@ async function runWatchdogSchedule(env) {
 
 // Credential presence is sufficient to bypass the shared URL-keyed cache.
 function requiresPrivateDelivery(request, pathname, method) {
-  if (method !== "GET" && method !== "HEAD") return false;
+  if (method === "OPTIONS") return false;
+  // Administrative/authentication responses are sensitive even on failures.
+  if (pathname === "/api/admin" || pathname.startsWith("/api/admin/")
+    || pathname === "/api/auth" || pathname.startsWith("/api/auth/")) return true;
+  // Credentials can be present on any HTTP method, not just reads.
   return ["X-API-Key", "X-Sentinel-Key", "Authorization", "X-Admin-Key", "Cookie"]
     .some(name => request.headers.has(name))
     || new URL(request.url).searchParams.has("api_key");
 }
 
-function enforcePrivateDelivery(response) {
+function enforcePrivateDelivery(response, pathname) {
   const directives = (response.headers.get("Cache-Control") || "")
     .split(",").map(value => value.trim().toLowerCase());
-  // Preserve existing safe no-store response contracts, including auth errors.
-  // Conflicting public/shared-cache directives must never survive.
-  if (!directives.includes("no-store") || directives.some(value =>
+  const explicitPrivate = pathname === "/api/admin" || pathname.startsWith("/api/admin/")
+    || pathname === "/api/auth" || pathname.startsWith("/api/auth/")
+    || (response.status >= 200 && response.status < 300
+      && (pathname === "/api/v1/intel/latest.json" || pathname === "/latest.json"));
+  if (explicitPrivate || !directives.includes("no-store") || directives.some(value =>
     /^(public|s-maxage)(?:\s*=|$)/.test(value))) {
     response.headers.set("Cache-Control", "private, no-store");
   }
+  for (const name of ["CDN-Cache-Control", "Cloudflare-CDN-Cache-Control",
+    "Surrogate-Control", "Expires"]) response.headers.delete(name);
   return response;
 }
 
@@ -9740,7 +9748,7 @@ export default {
 
     try {
       const response = withBaselineHeaders(await handleRequest(request, env, ctx), request, pathname, method, requestId);
-      if (privateDelivery) enforcePrivateDelivery(response);
+      if (privateDelivery) enforcePrivateDelivery(response, pathname);
       // Only a 200 is ever stored -- never pins an error/outage in place
       // for the TTL. Cache-Control is normalised to a known, bounded value
       // here rather than trusting each individual handler to have set one
@@ -9787,7 +9795,7 @@ export default {
         }),
         request, pathname, method, requestId
       );
-      if (privateDelivery) enforcePrivateDelivery(errorResponse);
+      if (privateDelivery) enforcePrivateDelivery(errorResponse, pathname);
       return errorResponse;
     }
   },
